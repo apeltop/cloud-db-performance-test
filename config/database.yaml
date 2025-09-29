@@ -2,7 +2,7 @@ clouds:
   gcp:
     name: "Google Cloud SQL"
     host: "${GCP_DB_HOST:-localhost}"
-    port: 5432
+    port: "${GCP_DB_PORT:-5432}"
     database: "${GCP_DB_NAME:-test_gcp}"
     user: "${GCP_DB_USER:-postgres}"
     password: "${GCP_DB_PASSWORD:-password}"
@@ -31,7 +31,7 @@ clouds:
 
 # Mock database settings for testing without real cloud DBs
 mock_mode:
-  enabled: true
+  enabled: false
   simulate_latency: true
   latency_ranges:
     gcp: [0.05, 0.15]  # 50-150ms
