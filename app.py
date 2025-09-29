@@ -37,6 +37,14 @@ if 'migration_progress' not in st.session_state:
         'current_batch': 0,
         'total_batches_estimated': 0
     }
+if 'migration_files_queue' not in st.session_state:
+    st.session_state.migration_files_queue = []
+if 'migration_results' not in st.session_state:
+    st.session_state.migration_results = []
+if 'migration_migrator' not in st.session_state:
+    st.session_state.migration_migrator = None
+if 'migration_initial_counts' not in st.session_state:
+    st.session_state.migration_initial_counts = {}
 
 # 메인 타이틀
 st.title("🚀 Cloud PostgreSQL Performance Tester")
@@ -114,7 +122,15 @@ with tab1:
                 # 테스트 실행 버튼
                 if st.button("🚀 성능 테스트 실행"):
                     if selected_clouds:
-                        with st.spinner("테스트 실행 중..."):
+                        # Create progress container for real-time updates
+                        progress_container = st.empty()
+                        status_container = st.empty()
+
+                        with progress_container.container():
+                            st.info("🚀 테스트 실행 중...")
+                            progress_bar = st.progress(0.0)
+
+                        with status_container.container():
                             # Initialize database manager and data processor
                             db_manager = DatabaseManager(config_loader)
                             data_processor = DataProcessor(db_manager, chunk_size)
@@ -150,8 +166,9 @@ with tab1:
                                     })
                             st.session_state.current_batch_stats = batch_stats
 
+                        progress_bar.progress(1.0)
                         st.success("✅ 테스트가 완료되었습니다! '성능 비교' 탭에서 결과를 확인하세요.")
-                        # st.rerun()  # 오래된 버전에서는 자동 리로드 안함
+                        st.rerun()  # Enable auto reload for real-time updates
                     else:
                         st.error("테스트할 클라우드를 선택하세요!")
 
@@ -187,7 +204,15 @@ with tab1:
             # 테스트 실행 버튼
             if st.button("🚀 성능 테스트 실행", key="sample_test_button"):
                 if selected_clouds:
-                    with st.spinner("테스트 실행 중..."):
+                    # Create progress container for real-time updates
+                    progress_container = st.empty()
+                    status_container = st.empty()
+
+                    with progress_container.container():
+                        st.info("🚀 테스트 실행 중...")
+                        progress_bar = st.progress(0.0)
+
+                    with status_container.container():
                         # Initialize database manager and data processor
                         db_manager = DatabaseManager(config_loader)
                         data_processor = DataProcessor(db_manager, chunk_size)
@@ -223,8 +248,9 @@ with tab1:
                                 })
                         st.session_state.current_batch_stats = batch_stats
 
+                    progress_bar.progress(1.0)
                     st.success("✅ 테스트가 완료되었습니다! '성능 비교' 탭에서 결과를 확인하세요.")
-                    # st.experimental_rerun()  # 오래된 버전에서는 자동 리로드 안함
+                    st.rerun()  # Enable auto reload for real-time updates
                 else:
                     st.error("테스트할 클라우드를 선택하세요!")
 
@@ -439,6 +465,12 @@ with tab2:
                             if hasattr(st, 'session_state'):
                                 st.session_state.current_batch_stats = self.batch_performance_stats.copy()
                                 st.session_state.migration_progress['current_batch'] = batch_number
+                                # Force UI refresh for real-time updates
+                                if batch_number % 5 == 0:  # Refresh every 5 batches to avoid too frequent updates
+                                    try:
+                                        st.rerun()
+                                    except:
+                                        pass  # Ignore if rerun is not available in this context
                         except ImportError:
                             pass
 
@@ -633,42 +665,119 @@ with tab2:
                 st.info(f"총 데이터 크기: {total_size:.2f} MB")
 
                 # 마이그레이션 실행 버튼
-                if st.button("🚀 데이터 마이그레이션 실행", type="primary"):
-                    # Setup logger
-                    logger, log_filename = setup_migration_logger()
-                    st.info(f"📝 로그 파일: `{log_filename}`")
+                if not st.session_state.migration_in_progress:
+                    if st.button("🚀 데이터 마이그레이션 실행", type="primary"):
+                        # Setup logger
+                        logger, log_filename = setup_migration_logger()
+                        st.info(f"📝 로그 파일: `{log_filename}`")
 
-                    migrator = StreamlitDataMigrator(logger)
+                        migrator = StreamlitDataMigrator(logger)
 
-                    if migrator.conn:
-                        # Set migration in progress
-                        # st.session_state.migration_in_progress = True
-                        st.session_state.migration_progress['total_files'] = len(json_files)
-                        st.session_state.migration_progress['files_completed'] = 0
-                        st.session_state.current_batch_stats = []
+                        if migrator.conn:
+                            # Initialize migration state
+                            st.session_state.migration_in_progress = True
+                            st.session_state.migration_files_queue = sorted(json_files)
+                            st.session_state.migration_results = []
+                            st.session_state.migration_migrator = migrator
+                            st.session_state.migration_progress['total_files'] = len(json_files)
+                            st.session_state.migration_progress['files_completed'] = 0
+                            st.session_state.current_batch_stats = []
 
-                        # 초기 테이블 카운트
-                        st.subheader("📊 마이그레이션 진행상황")
-                        initial_counts = migrator.get_table_counts()
+                            # Get initial counts
+                            initial_counts = migrator.get_table_counts()
+                            st.session_state.migration_initial_counts = initial_counts
 
+                            st.rerun()  # Refresh to start processing
+                else:
+                    # Migration is in progress - show stop button
+                    if st.button("⏹️ 마이그레이션 중단", type="secondary"):
+                        st.session_state.migration_in_progress = False
+                        st.session_state.migration_files_queue = []
+                        if st.session_state.migration_migrator:
+                            st.session_state.migration_migrator.close()
+                            st.session_state.migration_migrator = None
+                        st.rerun()
+
+                # Handle single file processing during migration
+                if st.session_state.migration_in_progress and st.session_state.migration_files_queue:
+                    file_path = st.session_state.migration_files_queue[0]  # Get next file
+                    migrator = st.session_state.migration_migrator
+
+                    # Show progress info
+                    st.subheader("📊 마이그레이션 진행상황")
+
+                    # Show initial counts if first file
+                    if st.session_state.migration_progress['files_completed'] == 0:
                         st.write("**초기 테이블 레코드 수:**")
-                        for table, count in initial_counts.items():
+                        for table, count in st.session_state.migration_initial_counts.items():
                             st.write(f"  - {table}: {count:,} records")
 
-                        # 진행상황 추적
-                        progress_container = st.container()
-                        results = []
+                    # Show current progress
+                    progress_info = st.empty()
+                    with progress_info.container():
+                        files_completed = st.session_state.migration_progress['files_completed']
+                        total_files = st.session_state.migration_progress['total_files']
 
-                        for i, file_path in enumerate(sorted(json_files)):
-                            with progress_container:
-                                st.write(f"처리 중: {file_path.name}")
-                                file_progress = st.progress(0)
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("파일 진행률", f"{files_completed}/{total_files}")
+                        with col2:
+                            st.metric("현재 파일", file_path.name)
+                        with col3:
+                            if st.session_state.current_batch_stats:
+                                total_batches = len(st.session_state.current_batch_stats)
+                                st.metric("총 배치 수", total_batches)
 
-                                # Update progress
-                                st.session_state.migration_progress['files_completed'] = i
+                        # Overall progress bar
+                        progress_pct = files_completed / total_files if total_files > 0 else 0
+                        st.progress(progress_pct, text=f"전체 진행률: {progress_pct*100:.1f}%")
 
-                                result = migrator.process_file(file_path, file_progress)
-                                results.append(result)
+                    # Process current file
+                    with st.status(f"📂 {file_path.name} 처리 중...", expanded=True) as status:
+                        st.write(f"파일 크기: {file_path.stat().st_size / (1024 * 1024):.2f} MB")
+
+                        # Create a dummy progress bar for the file
+                        file_progress_bar = st.progress(0)
+
+                        try:
+                            result = migrator.process_file(file_path, file_progress_bar)
+                            st.session_state.migration_results.append(result)
+
+                            if result["status"] == "success":
+                                status.update(label=f"✅ {file_path.name} 완료", state="complete")
+                                st.success(f"✅ {result['records_inserted']:,} 레코드 삽입 완료")
+                            else:
+                                status.update(label=f"❌ {file_path.name} 실패", state="error")
+                                st.error(f"❌ {result.get('reason', '알 수 없는 오류')}")
+
+                        except Exception as e:
+                            status.update(label=f"❌ {file_path.name} 오류", state="error")
+                            st.error(f"처리 중 오류: {str(e)}")
+                            result = {"filename": file_path.name, "status": "error", "reason": str(e)}
+                            st.session_state.migration_results.append(result)
+
+                    # Remove processed file from queue
+                    st.session_state.migration_files_queue.pop(0)
+                    st.session_state.migration_progress['files_completed'] += 1
+
+                    # Show real-time batch statistics
+                    if st.session_state.current_batch_stats:
+                        st.subheader("📈 실시간 배치 통계")
+                        latest_stats = st.session_state.current_batch_stats[-1]
+                        col_a, col_b, col_c, col_d = st.columns(4)
+                        with col_a:
+                            st.metric("총 배치", len(st.session_state.current_batch_stats))
+                        with col_b:
+                            st.metric("최근 처리량", f"{latest_stats['records_per_second']:.1f} rec/s")
+                        with col_c:
+                            st.metric("누적 레코드", f"{latest_stats['cumulative_records']:,}")
+                        with col_d:
+                            avg_rps = sum(s['records_per_second'] for s in st.session_state.current_batch_stats[-5:]) / min(5, len(st.session_state.current_batch_stats))
+                            st.metric("평균 처리량 (최근 5배치)", f"{avg_rps:.1f} rec/s")
+
+                    # Auto-continue to next file
+                    time.sleep(0.5)  # Small delay to show progress
+                    st.rerun()
 
                                 if result["status"] == "success":
                                     st.success(f"✅ {result['filename']}: {result['records_inserted']:,} 레코드 삽입 완료")
@@ -678,110 +787,121 @@ with tab2:
                                 # Update files completed
                                 st.session_state.migration_progress['files_completed'] = i + 1
 
-                        # 최종 결과
-                        st.subheader("🎉 마이그레이션 완료!")
+                # Migration completed - show final results
+                elif st.session_state.migration_in_progress and not st.session_state.migration_files_queue:
+                    st.subheader("🎉 마이그레이션 완료!")
 
-                        successful = [r for r in results if r["status"] == "success"]
-                        failed = [r for r in results if r["status"] == "error"]
-                        skipped = [r for r in results if r["status"] == "skipped"]
+                    results = st.session_state.migration_results
+                    successful = [r for r in results if r["status"] == "success"]
+                    failed = [r for r in results if r["status"] == "error"]
+                    skipped = [r for r in results if r["status"] == "skipped"]
 
-                        total_records = sum(r.get("records_inserted", 0) for r in successful)
+                    total_records = sum(r.get("records_inserted", 0) for r in successful)
 
-                        col_a, col_b, col_c, col_d = st.columns(4)
-                        with col_a:
-                            st.metric("총 파일", len(results))
-                        with col_b:
-                            st.metric("성공", len(successful))
-                        with col_c:
-                            st.metric("실패", len(failed))
-                        with col_d:
-                            st.metric("총 레코드", f"{total_records:,}")
+                    col_a, col_b, col_c, col_d = st.columns(4)
+                    with col_a:
+                        st.metric("총 파일", len(results))
+                    with col_b:
+                        st.metric("성공", len(successful))
+                    with col_c:
+                        st.metric("실패", len(failed))
+                    with col_d:
+                        st.metric("총 레코드", f"{total_records:,}")
 
-                        # 최종 테이블 카운트
-                        final_counts = migrator.get_table_counts()
+                    # 최종 테이블 카운트
+                    if st.session_state.migration_migrator:
+                        final_counts = st.session_state.migration_migrator.get_table_counts()
 
                         st.write("**최종 테이블 레코드 수:**")
                         for table, count in final_counts.items():
-                            initial = initial_counts.get(table, 0)
+                            initial = st.session_state.migration_initial_counts.get(table, 0)
                             added = count - initial
                             st.write(f"  - {table}: {count:,} records (+{added:,})")
 
                         # 배치 성능 분석 표시
-                        batch_stats = migrator.get_batch_performance_stats()
-                        performance_summary = migrator.get_performance_summary()
+                        if st.session_state.migration_migrator:
+                            batch_stats = st.session_state.migration_migrator.get_batch_performance_stats()
+                            performance_summary = st.session_state.migration_migrator.get_performance_summary()
 
-                        if batch_stats and performance_summary:
-                            st.markdown("---")
-                            st.subheader("📈 배치별 성능 분석")
+                            if batch_stats and performance_summary:
+                                st.markdown("---")
+                                st.subheader("📈 배치별 성능 분석")
 
-                            # 성능 요약 메트릭
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("총 배치 수", performance_summary['total_batches'])
-                            with col2:
-                                st.metric("평균 배치 시간", f"{performance_summary['average_batch_time_seconds']:.3f}초")
-                            with col3:
-                                st.metric("평균 처리량", f"{performance_summary['average_records_per_second']:.1f} rec/s")
-                            with col4:
-                                st.metric("총 처리 시간", f"{performance_summary['total_duration_seconds']:.1f}초")
+                                # 성능 요약 메트릭
+                                col1, col2, col3, col4 = st.columns(4)
+                                with col1:
+                                    st.metric("총 배치 수", performance_summary['total_batches'])
+                                with col2:
+                                    st.metric("평균 배치 시간", f"{performance_summary['average_batch_time_seconds']:.3f}초")
+                                with col3:
+                                    st.metric("평균 처리량", f"{performance_summary['average_records_per_second']:.1f} rec/s")
+                                with col4:
+                                    st.metric("총 처리 시간", f"{performance_summary['total_duration_seconds']:.1f}초")
 
-                            # 배치별 처리 시간 차트
-                            df_batch_stats = pd.DataFrame(batch_stats)
+                                # 배치별 처리 시간 차트
+                                df_batch_stats = pd.DataFrame(batch_stats)
 
-                            if not df_batch_stats.empty:
-                                # 처리 시간 추이 차트
-                                fig_timeline = px.line(
-                                    df_batch_stats,
-                                    x='batch_number',
-                                    y='total_duration_seconds',
-                                    color='table_name',
-                                    title='배치별 처리 시간 추이',
-                                    labels={
-                                        'batch_number': '배치 번호',
-                                        'total_duration_seconds': '처리 시간 (초)',
-                                        'table_name': '테이블'
-                                    }
-                                )
-                                fig_timeline.update_layout(height=400)
-                                st.plotly_chart(fig_timeline, use_container_width=True)
+                                if not df_batch_stats.empty:
+                                    # 처리 시간 추이 차트
+                                    fig_timeline = px.line(
+                                        df_batch_stats,
+                                        x='batch_number',
+                                        y='total_duration_seconds',
+                                        color='table_name',
+                                        title='배치별 처리 시간 추이',
+                                        labels={
+                                            'batch_number': '배치 번호',
+                                            'total_duration_seconds': '처리 시간 (초)',
+                                            'table_name': '테이블'
+                                        }
+                                    )
+                                    fig_timeline.update_layout(height=400)
+                                    st.plotly_chart(fig_timeline, width='stretch')
 
-                                # 처리량 추이 차트
-                                fig_throughput = px.line(
-                                    df_batch_stats,
-                                    x='batch_number',
-                                    y='records_per_second',
-                                    color='table_name',
-                                    title='배치별 처리량 추이',
-                                    labels={
-                                        'batch_number': '배치 번호',
-                                        'records_per_second': '처리량 (records/sec)',
-                                        'table_name': '테이블'
-                                    }
-                                )
-                                fig_throughput.update_layout(height=400)
-                                st.plotly_chart(fig_throughput, use_container_width=True)
+                                    # 처리량 추이 차트
+                                    fig_throughput = px.line(
+                                        df_batch_stats,
+                                        x='batch_number',
+                                        y='records_per_second',
+                                        color='table_name',
+                                        title='배치별 처리량 추이',
+                                        labels={
+                                            'batch_number': '배치 번호',
+                                            'records_per_second': '처리량 (records/sec)',
+                                            'table_name': '테이블'
+                                        }
+                                    )
+                                    fig_throughput.update_layout(height=400)
+                                    st.plotly_chart(fig_throughput, width='stretch')
 
-                                # 테이블별 성능 요약
-                                if 'table_statistics' in performance_summary:
-                                    st.subheader("테이블별 성능 요약")
-                                    table_summary_data = []
-                                    for table, stats in performance_summary['table_statistics'].items():
-                                        table_summary_data.append({
-                                            '테이블': table,
-                                            '배치 수': stats['batches'],
-                                            '총 레코드': f"{stats['records']:,}",
-                                            '총 시간 (초)': f"{stats['duration']:.2f}",
-                                            '평균 처리량 (rec/s)': f"{stats['avg_rps']:.1f}"
-                                        })
+                                    # 테이블별 성능 요약
+                                    if 'table_statistics' in performance_summary:
+                                        st.subheader("테이블별 성능 요약")
+                                        table_summary_data = []
+                                        for table, stats in performance_summary['table_statistics'].items():
+                                            table_summary_data.append({
+                                                '테이블': table,
+                                                '배치 수': stats['batches'],
+                                                '총 레코드': f"{stats['records']:,}",
+                                                '총 시간 (초)': f"{stats['duration']:.2f}",
+                                                '평균 처리량 (rec/s)': f"{stats['avg_rps']:.1f}"
+                                            })
 
-                                    if table_summary_data:
-                                        df_table_summary = pd.DataFrame(table_summary_data)
-                                        st.dataframe(df_table_summary, use_container_width=True)
+                                        if table_summary_data:
+                                            df_table_summary = pd.DataFrame(table_summary_data)
+                                            st.dataframe(df_table_summary, width='stretch')
 
-                        # Mark migration as completed
+                    # Reset button to start new migration
+                    if st.button("🔄 새 마이그레이션 시작", type="primary"):
                         st.session_state.migration_in_progress = False
-
-                        migrator.close()
+                        st.session_state.migration_files_queue = []
+                        st.session_state.migration_results = []
+                        if st.session_state.migration_migrator:
+                            st.session_state.migration_migrator.close()
+                            st.session_state.migration_migrator = None
+                        st.session_state.current_batch_stats = []
+                        st.session_state.migration_initial_counts = {}
+                        st.rerun()
 
             else:
                 st.warning("데이터 파일을 찾을 수 없습니다.")
