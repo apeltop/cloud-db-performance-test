@@ -1,0 +1,46 @@
+clouds:
+  gcp:
+    name: "Google Cloud SQL"
+    host: "${GCP_DB_HOST:-localhost}"
+    port: 5432
+    database: "${GCP_DB_NAME:-test_gcp}"
+    user: "${GCP_DB_USER:-postgres}"
+    password: "${GCP_DB_PASSWORD:-password}"
+    ssl_mode: "require"
+    connection_timeout: 30
+
+  azure:
+    name: "Azure Database for PostgreSQL"
+    host: "${AZURE_DB_HOST:-localhost}"
+    port: 5432
+    database: "${AZURE_DB_NAME:-test_azure}"
+    user: "${AZURE_DB_USER:-postgres}"
+    password: "${AZURE_DB_PASSWORD:-password}"
+    ssl_mode: "require"
+    connection_timeout: 30
+
+  aws:
+    name: "AWS RDS PostgreSQL"
+    host: "${AWS_DB_HOST:-localhost}"
+    port: 5432
+    database: "${AWS_DB_NAME:-test_aws}"
+    user: "${AWS_DB_USER:-postgres}"
+    password: "${AWS_DB_PASSWORD:-password}"
+    ssl_mode: "require"
+    connection_timeout: 30
+
+# Mock database settings for testing without real cloud DBs
+mock_mode:
+  enabled: true
+  simulate_latency: true
+  latency_ranges:
+    gcp: [0.05, 0.15]  # 50-150ms
+    azure: [0.08, 0.18]  # 80-180ms
+    aws: [0.06, 0.16]   # 60-160ms
+
+# Performance test settings
+test_settings:
+  chunk_size: 10
+  max_concurrent_connections: 5
+  retry_attempts: 3
+  retry_delay: 1.0

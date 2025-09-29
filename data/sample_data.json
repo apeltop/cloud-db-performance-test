@@ -1,0 +1,286 @@
+[
+  {
+    "user_id": 1,
+    "name": "김민수",
+    "email": "minsu.kim@example.com",
+    "age": 28,
+    "metadata": {
+      "department": "개발팀",
+      "skills": ["Python", "JavaScript", "PostgreSQL"],
+      "location": "서울",
+      "experience_years": 5
+    },
+    "score": 87.5,
+    "is_active": true
+  },
+  {
+    "user_id": 2,
+    "name": "이영희",
+    "email": "younghee.lee@example.com",
+    "age": 32,
+    "metadata": {
+      "department": "마케팅팀",
+      "skills": ["Analytics", "SEO", "Content Marketing"],
+      "location": "부산",
+      "projects": ["웹사이트 리뉴얼", "SNS 마케팅"]
+    },
+    "score": 92.3,
+    "is_active": true
+  },
+  {
+    "user_id": 3,
+    "name": "박철수",
+    "email": "chulsoo.park@example.com",
+    "age": 24,
+    "metadata": {
+      "department": "디자인팀",
+      "skills": ["Photoshop", "Illustrator", "Figma"],
+      "location": "대구",
+      "portfolio": "https://portfolio.example.com"
+    },
+    "score": 78.9,
+    "is_active": false
+  },
+  {
+    "user_id": 4,
+    "name": "정수연",
+    "email": "suyeon.jung@example.com",
+    "age": 29,
+    "metadata": {
+      "department": "기획팀",
+      "skills": ["Project Management", "Data Analysis"],
+      "location": "인천",
+      "certifications": ["PMP", "SQLD"]
+    },
+    "score": 84.7,
+    "is_active": true
+  },
+  {
+    "user_id": 5,
+    "name": "최동현",
+    "email": "donghyun.choi@example.com",
+    "age": 35,
+    "metadata": {
+      "department": "개발팀",
+      "skills": ["Java", "Spring", "Docker", "Kubernetes"],
+      "location": "서울",
+      "team_lead": true,
+      "experience_years": 10
+    },
+    "score": 95.2,
+    "is_active": true
+  },
+  {
+    "user_id": 6,
+    "name": "한지민",
+    "email": "jimin.han@example.com",
+    "age": 26,
+    "metadata": {
+      "department": "HR팀",
+      "skills": ["Recruitment", "Training", "Performance Management"],
+      "location": "광주",
+      "languages": ["Korean", "English", "Japanese"]
+    },
+    "score": 88.1,
+    "is_active": true
+  },
+  {
+    "user_id": 7,
+    "name": "김태우",
+    "email": "taewoo.kim@example.com",
+    "age": 31,
+    "metadata": {
+      "department": "영업팀",
+      "skills": ["B2B Sales", "Customer Relations", "Negotiation"],
+      "location": "대전",
+      "achievements": ["2023년 최우수 영업사원", "신규고객 50개사 확보"]
+    },
+    "score": 91.8,
+    "is_active": true
+  },
+  {
+    "user_id": 8,
+    "name": "이소영",
+    "email": "soyoung.lee@example.com",
+    "age": 27,
+    "metadata": {
+      "department": "재무팀",
+      "skills": ["Financial Analysis", "Budgeting", "Taxation"],
+      "location": "울산",
+      "certifications": ["CPA", "CFA Level 1"]
+    },
+    "score": 89.4,
+    "is_active": true
+  },
+  {
+    "user_id": 9,
+    "name": "박민지",
+    "email": "minji.park@example.com",
+    "age": 23,
+    "metadata": {
+      "department": "개발팀",
+      "skills": ["React", "Node.js", "MongoDB"],
+      "location": "서울",
+      "intern": true,
+      "graduation_year": 2023
+    },
+    "score": 76.3,
+    "is_active": true
+  },
+  {
+    "user_id": 10,
+    "name": "조현우",
+    "email": "hyunwoo.jo@example.com",
+    "age": 33,
+    "metadata": {
+      "department": "품질관리팀",
+      "skills": ["Quality Assurance", "Testing", "Process Improvement"],
+      "location": "창원",
+      "iso_certified": true
+    },
+    "score": 86.7,
+    "is_active": true
+  },
+  {
+    "user_id": 11,
+    "name": "신예린",
+    "email": "yerin.shin@example.com",
+    "age": 25,
+    "metadata": {
+      "department": "마케팅팀",
+      "skills": ["Social Media", "Content Creation", "Brand Management"],
+      "location": "제주",
+      "followers": 15000
+    },
+    "score": 82.9,
+    "is_active": true
+  },
+  {
+    "user_id": 12,
+    "name": "김성호",
+    "email": "sungho.kim@example.com",
+    "age": 30,
+    "metadata": {
+      "department": "보안팀",
+      "skills": ["Cybersecurity", "Network Security", "Incident Response"],
+      "location": "수원",
+      "certifications": ["CISSP", "CEH"]
+    },
+    "score": 93.6,
+    "is_active": true
+  },
+  {
+    "user_id": 13,
+    "name": "황지수",
+    "email": "jisoo.hwang@example.com",
+    "age": 28,
+    "metadata": {
+      "department": "고객서비스팀",
+      "skills": ["Customer Support", "Problem Solving", "Communication"],
+      "location": "천안",
+      "satisfaction_rating": 4.8
+    },
+    "score": 85.3,
+    "is_active": true
+  },
+  {
+    "user_id": 14,
+    "name": "오준영",
+    "email": "junyoung.oh@example.com",
+    "age": 34,
+    "metadata": {
+      "department": "연구개발팀",
+      "skills": ["Machine Learning", "Data Science", "AI Research"],
+      "location": "판교",
+      "publications": 12,
+      "phd": true
+    },
+    "score": 97.1,
+    "is_active": true
+  },
+  {
+    "user_id": 15,
+    "name": "임서현",
+    "email": "seohyun.lim@example.com",
+    "age": 26,
+    "metadata": {
+      "department": "법무팀",
+      "skills": ["Contract Law", "Compliance", "Legal Research"],
+      "location": "서울",
+      "bar_exam_passed": true
+    },
+    "score": 90.7,
+    "is_active": true
+  },
+  {
+    "user_id": 16,
+    "name": "강민기",
+    "email": "minki.kang@example.com",
+    "age": 29,
+    "metadata": {
+      "department": "물류팀",
+      "skills": ["Supply Chain", "Inventory Management", "Logistics"],
+      "location": "인천",
+      "warehouse_locations": ["인천", "부산", "광주"]
+    },
+    "score": 87.8,
+    "is_active": true
+  },
+  {
+    "user_id": 17,
+    "name": "윤채영",
+    "email": "chaeyoung.yoon@example.com",
+    "age": 24,
+    "metadata": {
+      "department": "기획팀",
+      "skills": ["Business Analysis", "Market Research", "Strategy"],
+      "location": "서울",
+      "mba_candidate": true
+    },
+    "score": 79.5,
+    "is_active": true
+  },
+  {
+    "user_id": 18,
+    "name": "서동민",
+    "email": "dongmin.seo@example.com",
+    "age": 32,
+    "metadata": {
+      "department": "생산팀",
+      "skills": ["Manufacturing", "Process Optimization", "Lean Management"],
+      "location": "울산",
+      "factory_experience": 8
+    },
+    "score": 88.9,
+    "is_active": true
+  },
+  {
+    "user_id": 19,
+    "name": "노은정",
+    "email": "eunjung.no@example.com",
+    "age": 27,
+    "metadata": {
+      "department": "구매팀",
+      "skills": ["Procurement", "Vendor Management", "Cost Analysis"],
+      "location": "대구",
+      "cost_savings": "15%"
+    },
+    "score": 84.2,
+    "is_active": true
+  },
+  {
+    "user_id": 20,
+    "name": "류정훈",
+    "email": "junghoon.ryu@example.com",
+    "age": 31,
+    "metadata": {
+      "department": "영업팀",
+      "skills": ["International Sales", "Export", "Trade"],
+      "location": "서울",
+      "languages": ["Korean", "English", "Chinese", "Spanish"],
+      "export_volume": "$2.5M"
+    },
+    "score": 92.4,
+    "is_active": true
+  }
+]
