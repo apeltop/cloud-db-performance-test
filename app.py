@@ -21,12 +21,22 @@ st.set_page_config(
 )
 
 # Initialize session state
-if 'test_results' not in st.session_state:
-    st.session_state.test_results = None
 if 'processing_stats' not in st.session_state:
     st.session_state.processing_stats = None
 if 'data_processor' not in st.session_state:
     st.session_state.data_processor = None
+if 'migration_in_progress' not in st.session_state:
+    st.session_state.migration_in_progress = False
+if 'current_batch_stats' not in st.session_state:
+    st.session_state.current_batch_stats = []
+if 'migration_progress' not in st.session_state:
+    st.session_state.migration_progress = {
+        'current_file': '',
+        'files_completed': 0,
+        'total_files': 0,
+        'current_batch': 0,
+        'total_batches_estimated': 0
+    }
 
 # 메인 타이틀
 st.title("🚀 Cloud PostgreSQL Performance Tester")
@@ -57,18 +67,20 @@ mock_mode = st.sidebar.checkbox("Mock 모드 사용", value=True, help="실제 D
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 결과 내보내기")
 
-if st.session_state.test_results is not None:
+if st.session_state.current_batch_stats:
     if st.sidebar.button("CSV로 내보내기"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = f"results/test_results_{timestamp}.csv"
-        st.session_state.data_processor.export_results_to_csv(csv_path)
-        st.sidebar.success(f"결과가 {csv_path}에 저장되었습니다!")
+        csv_path = f"results/batch_stats_{timestamp}.csv"
+        df_stats = pd.DataFrame(st.session_state.current_batch_stats)
+        df_stats.to_csv(csv_path, index=False)
+        st.sidebar.success(f"배치 통계가 {csv_path}에 저장되었습니다!")
 
     if st.sidebar.button("JSON으로 내보내기"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_path = f"results/summary_{timestamp}.json"
-        st.session_state.data_processor.export_summary_to_json(json_path)
-        st.sidebar.success(f"요약이 {json_path}에 저장되었습니다!")
+        json_path = f"results/batch_stats_{timestamp}.json"
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(st.session_state.current_batch_stats, f, indent=2, ensure_ascii=False, default=str)
+        st.sidebar.success(f"배치 통계가 {json_path}에 저장되었습니다!")
 
 # 메인 콘텐츠
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 데이터 업로드", "🔄 데이터 마이그레이션", "📊 성능 비교", "📈 상세 분석", "⚙️ 설정"])
@@ -120,7 +132,23 @@ with tab1:
                             # Store results in session state
                             st.session_state.processing_stats = processing_stats
                             st.session_state.data_processor = data_processor
-                            st.session_state.test_results = data_processor.get_performance_summary()
+
+                            # Create batch statistics from test results for consistency
+                            batch_stats = []
+                            for i, result in enumerate(data_processor.results):
+                                if result.success:
+                                    batch_stats.append({
+                                        "batch_number": i + 1,
+                                        "table_name": f"sample_test_{result.cloud}",
+                                        "records_count": result.records_count,
+                                        "start_time": result.timestamp,
+                                        "end_time": result.timestamp + result.execution_time,
+                                        "total_duration_seconds": result.execution_time,
+                                        "execution_duration_seconds": result.execution_time,
+                                        "records_per_second": result.records_count / result.execution_time if result.execution_time > 0 else 0,
+                                        "cumulative_records": sum(r.records_count for r in data_processor.results[:i+1] if r.success)
+                                    })
+                            st.session_state.current_batch_stats = batch_stats
 
                         st.success("✅ 테스트가 완료되었습니다! '성능 비교' 탭에서 결과를 확인하세요.")
                         # st.rerun()  # 오래된 버전에서는 자동 리로드 안함
@@ -177,7 +205,23 @@ with tab1:
                         # Store results in session state
                         st.session_state.processing_stats = processing_stats
                         st.session_state.data_processor = data_processor
-                        st.session_state.test_results = data_processor.get_performance_summary()
+
+                        # Create batch statistics from test results for consistency
+                        batch_stats = []
+                        for i, result in enumerate(data_processor.results):
+                            if result.success:
+                                batch_stats.append({
+                                    "batch_number": i + 1,
+                                    "table_name": f"sample_test_{result.cloud}",
+                                    "records_count": result.records_count,
+                                    "start_time": result.timestamp,
+                                    "end_time": result.timestamp + result.execution_time,
+                                    "total_duration_seconds": result.execution_time,
+                                    "execution_duration_seconds": result.execution_time,
+                                    "records_per_second": result.records_count / result.execution_time if result.execution_time > 0 else 0,
+                                    "cumulative_records": sum(r.records_count for r in data_processor.results[:i+1] if r.success)
+                                })
+                        st.session_state.current_batch_stats = batch_stats
 
                     st.success("✅ 테스트가 완료되었습니다! '성능 비교' 탭에서 결과를 확인하세요.")
                     # st.experimental_rerun()  # 오래된 버전에서는 자동 리로드 안함
@@ -389,6 +433,15 @@ with tab2:
                         }
                         self.batch_performance_stats.append(batch_stat)
 
+                        # Update session state for real-time monitoring
+                        try:
+                            import streamlit as st
+                            if hasattr(st, 'session_state'):
+                                st.session_state.current_batch_stats = self.batch_performance_stats.copy()
+                                st.session_state.migration_progress['current_batch'] = batch_number
+                        except ImportError:
+                            pass
+
                         # Log progress with performance info
                         self.logger.info(f"Batch {batch_number} for {table_name}: {len(batch_data)} records in {batch_duration:.3f}s ({records_per_second:.1f} rec/s)")
 
@@ -421,6 +474,14 @@ with tab2:
 
             try:
                 self.logger.info(f"Processing {filename} -> {table_name}")
+
+                # Update migration progress
+                try:
+                    import streamlit as st
+                    if hasattr(st, 'session_state'):
+                        st.session_state.migration_progress['current_file'] = filename
+                except ImportError:
+                    pass
 
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -580,6 +641,12 @@ with tab2:
                     migrator = StreamlitDataMigrator(logger)
 
                     if migrator.conn:
+                        # Set migration in progress
+                        # st.session_state.migration_in_progress = True
+                        st.session_state.migration_progress['total_files'] = len(json_files)
+                        st.session_state.migration_progress['files_completed'] = 0
+                        st.session_state.current_batch_stats = []
+
                         # 초기 테이블 카운트
                         st.subheader("📊 마이그레이션 진행상황")
                         initial_counts = migrator.get_table_counts()
@@ -597,6 +664,9 @@ with tab2:
                                 st.write(f"처리 중: {file_path.name}")
                                 file_progress = st.progress(0)
 
+                                # Update progress
+                                st.session_state.migration_progress['files_completed'] = i
+
                                 result = migrator.process_file(file_path, file_progress)
                                 results.append(result)
 
@@ -604,6 +674,9 @@ with tab2:
                                     st.success(f"✅ {result['filename']}: {result['records_inserted']:,} 레코드 삽입 완료")
                                 else:
                                     st.error(f"❌ {result['filename']}: {result.get('reason', '알 수 없는 오류')}")
+
+                                # Update files completed
+                                st.session_state.migration_progress['files_completed'] = i + 1
 
                         # 최종 결과
                         st.subheader("🎉 마이그레이션 완료!")
@@ -705,6 +778,9 @@ with tab2:
                                         df_table_summary = pd.DataFrame(table_summary_data)
                                         st.dataframe(df_table_summary, use_container_width=True)
 
+                        # Mark migration as completed
+                        st.session_state.migration_in_progress = False
+
                         migrator.close()
 
             else:
@@ -734,97 +810,252 @@ with tab2:
 with tab3:
     st.header("📊 성능 비교 결과")
 
-    if st.session_state.test_results is not None:
-        results = st.session_state.test_results
-        stats = st.session_state.processing_stats
+    # Check for both migration batch stats and sample test data
+    if st.session_state.current_batch_stats or st.session_state.data_processor is not None:
 
-        # 전체 통계
-        col1, col2, col3, col4 = st.columns(4)
+        # Display migration performance if available
+        if st.session_state.current_batch_stats:
+            batch_stats = st.session_state.current_batch_stats
 
-        with col1:
-            st.metric("총 레코드 수", stats.total_records)
-        with col2:
-            st.metric("총 청크 수", stats.total_chunks)
-        with col3:
-            st.metric("처리 시간", f"{stats.processing_time:.2f}초")
-        with col4:
-            success_rate = (stats.success_count / (stats.success_count + stats.failure_count)) * 100
-            st.metric("성공률", f"{success_rate:.1f}%")
+            st.subheader("🚀 마이그레이션 성능 통계")
 
-        st.markdown("---")
+            if batch_stats:
+                # Calculate overall statistics
+                total_batches = len(batch_stats)
+                total_records = sum(stat['records_count'] for stat in batch_stats)
+                total_duration = sum(stat['total_duration_seconds'] for stat in batch_stats)
+                avg_records_per_second = total_records / total_duration if total_duration > 0 else 0
 
-        # 클라우드별 성능 비교
-        col1, col2 = st.columns(2)
+                # Performance metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("총 배치 수", total_batches)
+                with col2:
+                    st.metric("총 레코드 수", f"{total_records:,}")
+                with col3:
+                    st.metric("총 처리 시간", f"{total_duration:.2f}초")
+                with col4:
+                    st.metric("평균 처리량", f"{avg_records_per_second:.1f} rec/s")
 
-        with col1:
-            st.subheader("평균 실행 시간 비교")
+                st.markdown("---")
 
-            cloud_names = []
-            avg_times = []
+                # Table-wise performance
+                df_batch_stats = pd.DataFrame(batch_stats)
 
-            for cloud, data in results.items():
-                if data['successful_operations'] > 0:
-                    cloud_names.append(cloud.upper())
-                    avg_times.append(data['average_execution_time'])
+                if not df_batch_stats.empty:
+                    # Group by table for comparison
+                    table_summary = df_batch_stats.groupby('table_name').agg({
+                        'records_count': 'sum',
+                        'total_duration_seconds': 'sum',
+                        'records_per_second': 'mean',
+                        'batch_number': 'count'
+                    }).reset_index()
 
-            if cloud_names:
-                fig_bar = px.bar(
-                    x=cloud_names,
-                    y=avg_times,
-                    labels={'x': 'Cloud Provider', 'y': 'Average Execution Time (seconds)'},
-                    color=avg_times,
-                    color_continuous_scale='Viridis'
-                )
-                fig_bar.update_layout(showlegend=False)
-                st.plotly_chart(fig_bar, use_container_width=True)
+                    table_summary.columns = ['테이블', '총 레코드', '총 시간(초)', '평균 처리량(rec/s)', '배치 수']
 
-        with col2:
-            st.subheader("처리량 비교 (records/sec)")
+                    col1, col2 = st.columns(2)
 
-            cloud_names = []
-            throughput = []
+                    with col1:
+                        st.subheader("테이블별 성능 비교")
+                        st.dataframe(table_summary, use_container_width=True)
 
-            for cloud, data in results.items():
-                if data['successful_operations'] > 0:
-                    cloud_names.append(cloud.upper())
-                    throughput.append(data['records_per_second'])
+                    with col2:
+                        st.subheader("테이블별 처리량 비교")
+                        if len(table_summary) > 0:
+                            fig_bar = px.bar(
+                                table_summary,
+                                x='테이블',
+                                y='평균 처리량(rec/s)',
+                                title="테이블별 평균 처리량",
+                                color='평균 처리량(rec/s)',
+                                color_continuous_scale='Viridis'
+                            )
+                            fig_bar.update_layout(showlegend=False, xaxis_tickangle=-45)
+                            st.plotly_chart(fig_bar, use_container_width=True)
 
-            if cloud_names:
-                fig_throughput = px.bar(
-                    x=cloud_names,
-                    y=throughput,
-                    labels={'x': 'Cloud Provider', 'y': 'Records per Second'},
-                    color=throughput,
-                    color_continuous_scale='Plasma'
-                )
-                fig_throughput.update_layout(showlegend=False)
-                st.plotly_chart(fig_throughput, use_container_width=True)
+        # Display sample test performance if available
+        elif st.session_state.data_processor is not None and st.session_state.processing_stats is not None:
+            stats = st.session_state.processing_stats
+            processor = st.session_state.data_processor
 
-        # 상세 통계 테이블
-        st.subheader("상세 성능 통계")
+            st.subheader("🌟 샘플 데이터 테스트 성능")
 
-        summary_data = []
-        for cloud, data in results.items():
-            summary_data.append({
-                'Cloud': cloud.upper(),
-                '총 작업': data['total_operations'],
-                '성공': data['successful_operations'],
-                '실패': data['failed_operations'],
-                '성공률 (%)': f"{data['success_rate']:.1f}",
-                '평균 시간 (초)': f"{data['average_execution_time']:.4f}",
-                '최소 시간 (초)': f"{data['min_execution_time']:.4f}",
-                '최대 시간 (초)': f"{data['max_execution_time']:.4f}",
-                '처리량 (records/sec)': f"{data['records_per_second']:.2f}"
-            })
+            # 전체 통계
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("총 레코드 수", stats.total_records)
+            with col2:
+                st.metric("총 청크 수", stats.total_chunks)
+            with col3:
+                st.metric("처리 시간", f"{stats.processing_time:.2f}초")
+            with col4:
+                success_rate = (stats.success_count / (stats.success_count + stats.failure_count)) * 100 if (stats.success_count + stats.failure_count) > 0 else 0
+                st.metric("성공률", f"{success_rate:.1f}%")
 
-        df_summary = pd.DataFrame(summary_data)
-        st.dataframe(df_summary, use_container_width=True)
+            st.markdown("---")
 
+            # Cloud performance comparison
+            results = processor.get_performance_summary()
+            if results:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.subheader("평균 실행 시간 비교")
+                    cloud_names = []
+                    avg_times = []
+
+                    for cloud, data in results.items():
+                        if data['successful_operations'] > 0:
+                            cloud_names.append(cloud.upper())
+                            avg_times.append(data['average_execution_time'])
+
+                    if cloud_names:
+                        fig_bar = px.bar(
+                            x=cloud_names,
+                            y=avg_times,
+                            labels={'x': 'Cloud Provider', 'y': 'Average Execution Time (seconds)'},
+                            color=avg_times,
+                            color_continuous_scale='Viridis'
+                        )
+                        fig_bar.update_layout(showlegend=False)
+                        st.plotly_chart(fig_bar, use_container_width=True)
+
+                with col2:
+                    st.subheader("처리량 비교 (records/sec)")
+                    cloud_names = []
+                    throughput = []
+
+                    for cloud, data in results.items():
+                        if data['successful_operations'] > 0:
+                            cloud_names.append(cloud.upper())
+                            throughput.append(data['records_per_second'])
+
+                    if cloud_names:
+                        fig_throughput = px.bar(
+                            x=cloud_names,
+                            y=throughput,
+                            labels={'x': 'Cloud Provider', 'y': 'Records per Second'},
+                            color=throughput,
+                            color_continuous_scale='Plasma'
+                        )
+                        fig_throughput.update_layout(showlegend=False)
+                        st.plotly_chart(fig_throughput, use_container_width=True)
+
+                # 상세 통계 테이블
+                st.subheader("상세 성능 통계")
+
+                summary_data = []
+                for cloud, data in results.items():
+                    summary_data.append({
+                        'Cloud': cloud.upper(),
+                        '총 작업': data['total_operations'],
+                        '성공': data['successful_operations'],
+                        '실패': data['failed_operations'],
+                        '성공률 (%)': f"{data['success_rate']:.1f}",
+                        '평균 시간 (초)': f"{data['average_execution_time']:.4f}",
+                        '최소 시간 (초)': f"{data['min_execution_time']:.4f}",
+                        '최대 시간 (초)': f"{data['max_execution_time']:.4f}",
+                        '처리량 (records/sec)': f"{data['records_per_second']:.2f}"
+                    })
+
+                df_summary = pd.DataFrame(summary_data)
+                st.dataframe(df_summary, use_container_width=True)
     else:
-        st.info("테스트를 실행하면 결과가 여기에 표시됩니다.")
+        st.info("데이터 마이그레이션을 실행하거나 샘플 데이터 테스트를 실행하면 결과가 여기에 표시됩니다.")
 
 with tab4:
     st.header("📈 상세 분석")
+
+    # Check if migration is in progress or has batch stats
+    if st.session_state.migration_in_progress or st.session_state.current_batch_stats:
+        st.subheader("🚀 실시간 마이그레이션 성능 모니터링")
+
+        # Show migration progress if in progress
+        if st.session_state.migration_in_progress:
+            progress = st.session_state.migration_progress
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("현재 파일", progress.get('current_file', 'N/A'))
+            with col2:
+                files_progress = f"{progress.get('files_completed', 0)}/{progress.get('total_files', 0)}"
+                st.metric("파일 진행률", files_progress)
+            with col3:
+                current_batch = progress.get('current_batch', 0)
+                st.metric("현재 배치", current_batch)
+
+            # Auto-refresh control
+            if st.button("🔄 새로고침", key="refresh_migration"):
+                st.rerun()
+
+        # Display real-time batch statistics
+        if st.session_state.current_batch_stats:
+            batch_stats = st.session_state.current_batch_stats
+
+            if batch_stats:
+                st.markdown("---")
+                st.subheader("📊 실시간 배치 성능")
+
+                # Create DataFrame from current batch stats
+                df_batch_stats = pd.DataFrame(batch_stats)
+
+                # Recent performance metrics
+                if len(batch_stats) > 0:
+                    latest_stats = batch_stats[-1]
+                    recent_stats = batch_stats[-min(5, len(batch_stats)):]
+                    avg_recent_rps = sum(s['records_per_second'] for s in recent_stats) / len(recent_stats)
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("총 배치", len(batch_stats))
+                    with col2:
+                        st.metric("최근 처리량", f"{latest_stats['records_per_second']:.1f} rec/s")
+                    with col3:
+                        st.metric("평균 처리량 (최근 5배치)", f"{avg_recent_rps:.1f} rec/s")
+                    with col4:
+                        st.metric("최근 배치 시간", f"{latest_stats['total_duration_seconds']:.3f}초")
+
+                # Real-time charts
+                if not df_batch_stats.empty:
+                    # Processing time trend
+                    fig_realtime = px.line(
+                        df_batch_stats,
+                        x='batch_number',
+                        y='total_duration_seconds',
+                        color='table_name',
+                        title='실시간 배치별 처리 시간 추이',
+                        labels={
+                            'batch_number': '배치 번호',
+                            'total_duration_seconds': '처리 시간 (초)',
+                            'table_name': '테이블'
+                        }
+                    )
+                    fig_realtime.update_layout(height=400)
+                    st.plotly_chart(fig_realtime, use_container_width=True)
+
+                    # Throughput trend
+                    fig_throughput_realtime = px.line(
+                        df_batch_stats,
+                        x='batch_number',
+                        y='records_per_second',
+                        color='table_name',
+                        title='실시간 배치별 처리량 추이',
+                        labels={
+                            'batch_number': '배치 번호',
+                            'records_per_second': '처리량 (records/sec)',
+                            'table_name': '테이블'
+                        }
+                    )
+                    fig_throughput_realtime.update_layout(height=400)
+                    st.plotly_chart(fig_throughput_realtime, use_container_width=True)
+
+                    # Performance degradation warning
+                    if len(batch_stats) >= 3:
+                        recent_times = [s['total_duration_seconds'] for s in batch_stats[-3:]]
+                        if all(recent_times[i] < recent_times[i+1] for i in range(len(recent_times)-1)):
+                            st.warning("⚠️ 성능 저하 감지: 최근 3개 배치의 처리 시간이 계속 증가하고 있습니다.")
+
+        st.markdown("---")
 
     if st.session_state.data_processor is not None:
         processor = st.session_state.data_processor
@@ -908,8 +1139,8 @@ with tab4:
                     )
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-    else:
-        st.info("테스트를 실행하면 상세 분석이 여기에 표시됩니다.")
+    elif not st.session_state.migration_in_progress and not st.session_state.current_batch_stats:
+        st.info("테스트를 실행하거나 데이터 마이그레이션을 시작하면 상세 분석이 여기에 표시됩니다.")
 
 with tab5:
     st.header("⚙️ 설정")
