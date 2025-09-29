@@ -44,7 +44,7 @@ if 'config_loader' not in st.session_state:
 config_loader = st.session_state.config_loader
 
 # 테스트 설정
-chunk_size = st.sidebar.slider("청크 크기", 5, 50, 10, 5)
+chunk_size = st.sidebar.slider("청크 크기", 5, 100, 10, 10)
 selected_clouds = st.sidebar.multiselect(
     "테스트할 클라우드",
     options=['gcp', 'azure', 'aws'],
@@ -71,7 +71,7 @@ if st.session_state.test_results is not None:
         st.sidebar.success(f"요약이 {json_path}에 저장되었습니다!")
 
 # 메인 콘텐츠
-tab1, tab2, tab3, tab4 = st.tabs(["📤 데이터 업로드", "📊 성능 비교", "📈 상세 분석", "⚙️ 설정"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 데이터 업로드", "🔄 데이터 마이그레이션", "📊 성능 비교", "📈 상세 분석", "⚙️ 설정"])
 
 with tab1:
     st.header("📤 JSON 데이터 업로드")
@@ -185,6 +185,346 @@ with tab1:
                     st.error("테스트할 클라우드를 선택하세요!")
 
 with tab2:
+    st.header("🔄 데이터 마이그레이션")
+    st.markdown("기존 입찰 데이터를 PostgreSQL 테이블에 마이그레이션합니다.")
+
+    # 데이터 마이그레이션 import
+    import os
+    import json
+    import psycopg2
+    import psycopg2.extras
+    from pathlib import Path
+    from typing import Dict, List, Any, Optional
+
+    class StreamlitDataMigrator:
+        def __init__(self):
+            self.conn = None
+            self.connect_to_db()
+
+        def connect_to_db(self):
+            """Connect to PostgreSQL database"""
+            try:
+                self.conn = psycopg2.connect(
+                    host=os.getenv('GCP_DB_HOST'),
+                    port=os.getenv('GCP_DB_PORT', 5432),
+                    database=os.getenv('GCP_DB_NAME'),
+                    user=os.getenv('GCP_DB_USER'),
+                    password=os.getenv('GCP_DB_PASSWORD'),
+                    sslmode='require'
+                )
+                return True
+            except Exception as e:
+                st.error(f"Database connection failed: {e}")
+                return False
+
+        def get_table_name_from_filename(self, filename: str) -> Optional[str]:
+            """Extract table name from filename"""
+            if filename.startswith("BidPublicInfoService_BID_CNSTWK_"):
+                return "bid_pblanclistinfo_cnstwk"
+            elif filename.startswith("BidPublicInfoService_BID_SERVC_"):
+                return "bid_pblanclistinfo_servc"
+            elif filename.startswith("BidPublicInfoService_BID_THNG_"):
+                return "bid_pblanclistinfo_thng"
+            elif filename.startswith("BidPublicInfoService_BID_FRGCPT_"):
+                return "bid_pblanclistinfo_frgcpt"
+            elif filename.startswith("PubDataOpnStdService_ScsBidInfo_"):
+                return "opn_std_scsbid_info"
+            else:
+                return None
+
+        def get_table_columns(self, table_name: str) -> List[str]:
+            """Get column names for a table (excluding auto-generated columns)"""
+            try:
+                cur = self.conn.cursor()
+                cur.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                    AND column_name NOT IN ('createdAt', 'updatedAt', 'id')
+                    ORDER BY ordinal_position;
+                """, (table_name,))
+
+                columns = [row[0] for row in cur.fetchall()]
+                cur.close()
+
+                # Debug: Show columns found
+                st.write(f"**Columns found for {table_name}**: {len(columns)} columns")
+                st.code(f"Columns: {columns[:10]}...")  # Show first 10 columns
+
+                return columns
+            except Exception as e:
+                st.error(f"Failed to get columns for {table_name}: {e}")
+                return []
+
+        def prepare_record_data(self, record: Dict[str, Any], table_columns: List[str]) -> Dict[str, Any]:
+            """Prepare record data to match table columns"""
+            prepared_data = {}
+
+            for column in table_columns:
+                if column in record:
+                    value = record[column]
+                    if value is None:
+                        prepared_data[column] = None
+                    else:
+                        prepared_data[column] = str(value) if not isinstance(value, str) else value
+                else:
+                    prepared_data[column] = None
+
+            return prepared_data
+
+        def insert_batch(self, table_name: str, records: List[Dict[str, Any]], batch_size: int = 100) -> int:
+            """Insert records in batches"""
+            if not records:
+                return 0
+
+            table_columns = self.get_table_columns(table_name)
+            if not table_columns:
+                st.error(f"No columns found for table {table_name}")
+                return 0
+
+            total_inserted = 0
+            insert_sql = ""
+
+            try:
+                cur = self.conn.cursor()
+
+                for i in range(0, len(records), batch_size):
+                    batch = records[i:i + batch_size]
+                    batch_data = []
+
+                    for record in batch:
+                        prepared_data = self.prepare_record_data(record, table_columns)
+                        batch_data.append(prepared_data)
+
+                    if batch_data:
+                        # Quote column names to preserve case sensitivity
+                        quoted_columns = ', '.join([f'"{col}"' for col in table_columns])
+                        placeholders = ', '.join([f'%({col})s' for col in table_columns])
+
+                        insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
+
+                        # Handle special case for opn_std_scsbid_info table
+                        if table_name == 'opn_std_scsbid_info':
+                            for j, data in enumerate(batch_data):
+                                data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{i+j+1}"
+
+                            quoted_columns = '"id", ' + quoted_columns
+                            placeholders = '%(id)s, ' + placeholders
+                            insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
+
+                        # Log the SQL for debugging
+                        st.write(f"**SQL Debug**: `{insert_sql}`")
+                        if i == 0:  # Show sample data for first batch
+                            st.write(f"**Sample Data**: {batch_data[0] if batch_data else 'No data'}")
+
+                        cur.executemany(insert_sql, batch_data)
+                        self.conn.commit()
+                        total_inserted += len(batch_data)
+
+                cur.close()
+
+            except Exception as e:
+                st.error(f"❌ **SQL Error in {table_name}**:")
+                st.code(f"SQL: {insert_sql}")
+                st.code(f"Error: {str(e)}")
+                if 'batch_data' in locals() and batch_data:
+                    st.write(f"**Failed Data Sample**: {batch_data[0]}")
+                    st.write(f"**Available Columns**: {table_columns}")
+                    st.write(f"**Data Keys**: {list(batch_data[0].keys()) if batch_data else 'No data'}")
+                self.conn.rollback()
+                raise
+
+            return total_inserted
+
+        def process_file(self, file_path: Path, progress_bar) -> Dict[str, Any]:
+            """Process a single JSON file"""
+            filename = file_path.name
+            table_name = self.get_table_name_from_filename(filename)
+
+            if not table_name:
+                return {"filename": filename, "status": "skipped", "reason": "unknown file pattern"}
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                if not isinstance(data, list):
+                    return {"filename": filename, "status": "error", "reason": "invalid data format"}
+
+                inserted_count = self.insert_batch(table_name, data)
+                progress_bar.progress(1.0)
+
+                return {
+                    "filename": filename,
+                    "table": table_name,
+                    "status": "success",
+                    "records_processed": len(data),
+                    "records_inserted": inserted_count
+                }
+
+            except Exception as e:
+                return {
+                    "filename": filename,
+                    "table": table_name,
+                    "status": "error",
+                    "reason": str(e)
+                }
+
+        def get_table_counts(self) -> Dict[str, int]:
+            """Get record counts for all tables"""
+            tables = [
+                'bid_pblanclistinfo_cnstwk',
+                'bid_pblanclistinfo_frgcpt',
+                'bid_pblanclistinfo_servc',
+                'bid_pblanclistinfo_thng',
+                'opn_std_scsbid_info'
+            ]
+
+            counts = {}
+            try:
+                cur = self.conn.cursor()
+                for table in tables:
+                    cur.execute(f'SELECT COUNT(*) FROM {table}')
+                    counts[table] = cur.fetchone()[0]
+                cur.close()
+            except Exception as e:
+                st.error(f"Failed to get table counts: {e}")
+
+            return counts
+
+        def close(self):
+            """Close database connection"""
+            if self.conn:
+                self.conn.close()
+
+    # 마이그레이션 UI
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("📁 데이터 파일 현황")
+
+        # 데이터 디렉토리 확인
+        data_path = Path("data")
+        if data_path.exists():
+            json_files = [f for f in data_path.glob("*.json") if f.name != "sample_data.json"]
+
+            if json_files:
+                st.success(f"✅ {len(json_files)}개의 데이터 파일을 발견했습니다.")
+
+                # 파일 목록 표시
+                file_info = []
+                total_size = 0
+
+                for file_path in sorted(json_files):
+                    size_mb = file_path.stat().st_size / (1024 * 1024)
+                    total_size += size_mb
+
+                    table_name = "Unknown"
+                    if file_path.name.startswith("BidPublicInfoService_BID_CNSTWK_"):
+                        table_name = "bid_pblanclistinfo_cnstwk"
+                    elif file_path.name.startswith("BidPublicInfoService_BID_SERVC_"):
+                        table_name = "bid_pblanclistinfo_servc"
+                    elif file_path.name.startswith("BidPublicInfoService_BID_THNG_"):
+                        table_name = "bid_pblanclistinfo_thng"
+                    elif file_path.name.startswith("BidPublicInfoService_BID_FRGCPT_"):
+                        table_name = "bid_pblanclistinfo_frgcpt"
+                    elif file_path.name.startswith("PubDataOpnStdService_ScsBidInfo_"):
+                        table_name = "opn_std_scsbid_info"
+
+                    file_info.append({
+                        "파일명": file_path.name,
+                        "크기 (MB)": f"{size_mb:.2f}",
+                        "대상 테이블": table_name
+                    })
+
+                df_files = pd.DataFrame(file_info)
+                st.dataframe(df_files, use_container_width=True)
+
+                st.info(f"총 데이터 크기: {total_size:.2f} MB")
+
+                # 마이그레이션 실행 버튼
+                if st.button("🚀 데이터 마이그레이션 실행", type="primary"):
+                    migrator = StreamlitDataMigrator()
+
+                    if migrator.conn:
+                        # 초기 테이블 카운트
+                        st.subheader("📊 마이그레이션 진행상황")
+                        initial_counts = migrator.get_table_counts()
+
+                        st.write("**초기 테이블 레코드 수:**")
+                        for table, count in initial_counts.items():
+                            st.write(f"  - {table}: {count:,} records")
+
+                        # 진행상황 추적
+                        progress_container = st.container()
+                        results = []
+
+                        for i, file_path in enumerate(sorted(json_files)):
+                            with progress_container:
+                                st.write(f"처리 중: {file_path.name}")
+                                file_progress = st.progress(0)
+
+                                result = migrator.process_file(file_path, file_progress)
+                                results.append(result)
+
+                                if result["status"] == "success":
+                                    st.success(f"✅ {result['filename']}: {result['records_inserted']:,} 레코드 삽입 완료")
+                                else:
+                                    st.error(f"❌ {result['filename']}: {result.get('reason', '알 수 없는 오류')}")
+
+                        # 최종 결과
+                        st.subheader("🎉 마이그레이션 완료!")
+
+                        successful = [r for r in results if r["status"] == "success"]
+                        failed = [r for r in results if r["status"] == "error"]
+                        skipped = [r for r in results if r["status"] == "skipped"]
+
+                        total_records = sum(r.get("records_inserted", 0) for r in successful)
+
+                        col_a, col_b, col_c, col_d = st.columns(4)
+                        with col_a:
+                            st.metric("총 파일", len(results))
+                        with col_b:
+                            st.metric("성공", len(successful))
+                        with col_c:
+                            st.metric("실패", len(failed))
+                        with col_d:
+                            st.metric("총 레코드", f"{total_records:,}")
+
+                        # 최종 테이블 카운트
+                        final_counts = migrator.get_table_counts()
+
+                        st.write("**최종 테이블 레코드 수:**")
+                        for table, count in final_counts.items():
+                            initial = initial_counts.get(table, 0)
+                            added = count - initial
+                            st.write(f"  - {table}: {count:,} records (+{added:,})")
+
+                        migrator.close()
+
+            else:
+                st.warning("데이터 파일을 찾을 수 없습니다.")
+        else:
+            st.error("data 디렉토리를 찾을 수 없습니다.")
+
+    with col2:
+        st.subheader("📋 현재 테이블 상태")
+
+        if st.button("🔄 테이블 상태 새로고침"):
+            try:
+                migrator = StreamlitDataMigrator()
+                if migrator.conn:
+                    counts = migrator.get_table_counts()
+
+                    st.write("**현재 레코드 수:**")
+                    for table, count in counts.items():
+                        st.write(f"  - {table}: {count:,}")
+
+                    migrator.close()
+            except Exception as e:
+                st.error(f"테이블 상태 조회 실패: {e}")
+
+with tab3:
     st.header("📊 성능 비교 결과")
 
     if st.session_state.test_results is not None:
@@ -276,7 +616,7 @@ with tab2:
     else:
         st.info("테스트를 실행하면 결과가 여기에 표시됩니다.")
 
-with tab3:
+with tab4:
     st.header("📈 상세 분석")
 
     if st.session_state.data_processor is not None:
@@ -364,7 +704,7 @@ with tab3:
     else:
         st.info("테스트를 실행하면 상세 분석이 여기에 표시됩니다.")
 
-with tab4:
+with tab5:
     st.header("⚙️ 설정")
 
     col1, col2 = st.columns(2)

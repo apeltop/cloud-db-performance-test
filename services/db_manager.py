@@ -1,9 +1,16 @@
 import asyncio
 import time
 import random
+import os
+import psycopg2
+import psycopg2.extras
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from config.config_loader import ConfigLoader
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 @dataclass
 class DatabaseConnection:
@@ -137,9 +144,26 @@ class DatabaseManager:
             # 95% success rate for mock connections
             return random.random() < 0.95
 
-        # TODO: Implement real database connection test
-        # For now, return True for development
-        return True
+        # Real database connection test
+        connection_info = self.connections.get(cloud)
+        if not connection_info:
+            return False
+
+        try:
+            conn = psycopg2.connect(
+                host=connection_info.host,
+                port=connection_info.port,
+                database=connection_info.database,
+                user=connection_info.user,
+                password=connection_info.password,
+                sslmode=connection_info.ssl_mode,
+                connect_timeout=connection_info.connection_timeout
+            )
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Connection test failed for {cloud}: {str(e)}")
+            return False
 
     async def create_table(self, cloud: str) -> bool:
         """Create table in specified cloud database"""
@@ -148,8 +172,33 @@ class DatabaseManager:
             await asyncio.sleep(random.uniform(0.02, 0.08))
             return True
 
-        # TODO: Implement real table creation
-        return True
+        # Real table creation
+        connection_info = self.connections.get(cloud)
+        if not connection_info:
+            return False
+
+        try:
+            conn = psycopg2.connect(
+                host=connection_info.host,
+                port=connection_info.port,
+                database=connection_info.database,
+                user=connection_info.user,
+                password=connection_info.password,
+                sslmode=connection_info.ssl_mode,
+                connect_timeout=connection_info.connection_timeout
+            )
+
+            cur = conn.cursor()
+            create_sql = self.get_table_creation_sql()
+            cur.execute(create_sql)
+            conn.commit()
+
+            cur.close()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Table creation failed for {cloud}: {str(e)}")
+            return False
 
     async def batch_insert(self, cloud: str, chunk_id: int, records: List[Dict[str, Any]]) -> InsertResult:
         """Perform batch insert operation"""
@@ -173,9 +222,37 @@ class DatabaseManager:
                 error_message = None if success else f"Mock error for {cloud} chunk {chunk_id}"
 
             else:
-                # TODO: Implement real database insert
-                success = True
-                error_message = None
+                # Real database insert
+                connection_info = self.connections.get(cloud)
+                if not connection_info:
+                    success = False
+                    error_message = f"No connection info for {cloud}"
+                else:
+                    try:
+                        conn = psycopg2.connect(
+                            host=connection_info.host,
+                            port=connection_info.port,
+                            database=connection_info.database,
+                            user=connection_info.user,
+                            password=connection_info.password,
+                            sslmode=connection_info.ssl_mode,
+                            connect_timeout=connection_info.connection_timeout
+                        )
+
+                        cur = conn.cursor()
+                        insert_sql, parameters = self.generate_insert_sql(records)
+
+                        if parameters:
+                            cur.executemany(insert_sql, parameters)
+                            conn.commit()
+
+                        cur.close()
+                        conn.close()
+                        success = True
+                        error_message = None
+                    except Exception as e:
+                        success = False
+                        error_message = str(e)
 
             execution_time = time.time() - start_time
 
@@ -205,8 +282,33 @@ class DatabaseManager:
             await asyncio.sleep(random.uniform(0.01, 0.03))
             return True
 
-        # TODO: Implement real table cleanup
-        return True
+        # Real table cleanup
+        connection_info = self.connections.get(cloud)
+        if not connection_info:
+            return False
+
+        try:
+            conn = psycopg2.connect(
+                host=connection_info.host,
+                port=connection_info.port,
+                database=connection_info.database,
+                user=connection_info.user,
+                password=connection_info.password,
+                sslmode=connection_info.ssl_mode,
+                connect_timeout=connection_info.connection_timeout
+            )
+
+            cur = conn.cursor()
+            table_name = self.schema_config['table_name']
+            cur.execute(f"DROP TABLE IF EXISTS {table_name};")
+            conn.commit()
+
+            cur.close()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Table cleanup failed for {cloud}: {str(e)}")
+            return False
 
     def get_connection_info(self, cloud: str) -> Optional[DatabaseConnection]:
         """Get connection information for specified cloud"""
