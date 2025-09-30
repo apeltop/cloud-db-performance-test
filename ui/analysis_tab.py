@@ -31,7 +31,7 @@ def render_analysis_tab():
 
             # Auto-refresh control
             if st.button("🔄 새로고침", key="refresh_migration"):
-                st.experimental_rerun()
+                st.rerun()
 
         # Display real-time batch statistics
         if st.session_state.current_batch_stats:

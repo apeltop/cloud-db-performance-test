@@ -133,14 +133,14 @@ def render_migration_tab():
 
         # Auto-refresh button
         if st.button("🔄 상태 새로고침"):
-            st.experimental_rerun()
+            st.rerun()
 
         # Auto-refresh toggle
         auto_refresh = st.checkbox("자동 새로고침 (5초마다)", value=False)
 
         if auto_refresh:
             time.sleep(5)
-            st.experimental_rerun()
+            st.rerun()
 
     # 마이그레이션 진행 상황 모니터링
     st.markdown("---")
@@ -348,7 +348,7 @@ def render_migration_tab():
             if st.button("🗑️ 통계 초기화"):
                 stats_writer.clear_all()
                 st.success("통계가 초기화되었습니다.")
-                st.experimental_rerun()
+                st.rerun()
 
     elif status == 'error':
         st.error("❌ 마이그레이션 중 오류 발생")
@@ -358,7 +358,7 @@ def render_migration_tab():
         # Clear button
         if st.button("🔄 상태 초기화"):
             stats_writer.clear_all()
-            st.experimental_rerun()
+            st.rerun()
 
     # Historical comparison section
     st.markdown("---")

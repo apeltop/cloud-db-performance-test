@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "current_file": "PubDataOpnStdService_ScsBidInfo__202509300000.json",
+  "current_batch": 1,
+  "files_completed": 8,
+  "total_files": 38,
+  "total_records_processed": 100,
+  "start_time": "2025-09-30T22:02:00.090760",
+  "last_update": "2025-09-30T22:38:23.084638",
+  "batch_size": 100,
+  "num_connections": 1,
+  "cloud_provider": "GCP",
+  "instance_type": "db-custom-1-3840"
+}

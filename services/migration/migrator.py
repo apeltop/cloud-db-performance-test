@@ -196,7 +196,7 @@ class StreamlitDataMigrator:
                             # Force UI refresh for real-time updates
                             if batch_number % 5 == 0:  # Refresh every 5 batches to avoid too frequent updates
                                 try:
-                                    st.experimental_rerun()
+                                    st.rerun()
                                 except:
                                     pass  # Ignore if rerun is not available in this context
                     except ImportError:

@@ -57,7 +57,7 @@ def run_performance_test(data, selected_clouds, chunk_size, config_loader):
 
     progress_bar.progress(1.0)
     st.success("✅ 테스트가 완료되었습니다! '성능 비교' 탭에서 결과를 확인하세요.")
-    st.experimental_rerun()  # Enable auto reload for real-time updates
+    st.rerun()  # Enable auto reload for real-time updates
 
 
 def render_upload_tab(chunk_size, selected_clouds, config_loader):
