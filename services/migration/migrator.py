@@ -89,7 +89,7 @@ class StreamlitDataMigrator:
         for column in table_columns:
             if column in record:
                 value = record[column]
-                if value is None:
+                if value is None or value == "":
                     prepared_data[column] = None
                 else:
                     prepared_data[column] = str(value) if not isinstance(value, str) else value
