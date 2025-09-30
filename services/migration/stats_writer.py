@@ -13,7 +13,8 @@ import threading
 class StatsWriter:
     """Thread-safe writer for migration statistics"""
 
-    def __init__(self, output_dir: str = "migration_outputs", cloud_provider: str = None, instance_type: str = None):
+    def __init__(self, output_dir: str = "migration_outputs", cloud_provider: str = None,
+                 instance_type: str = None, batch_size: int = 1000, num_connections: int = 1):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
 
@@ -23,6 +24,8 @@ class StatsWriter:
 
         self.cloud_provider = cloud_provider
         self.instance_type = instance_type
+        self.batch_size = batch_size
+        self.num_connections = num_connections
 
         self._lock = threading.Lock()
 
@@ -80,7 +83,9 @@ class StatsWriter:
             "total_files": total_files,
             "total_records_processed": 0,
             "start_time": datetime.now().isoformat(),
-            "last_update": datetime.now().isoformat()
+            "last_update": datetime.now().isoformat(),
+            "batch_size": self.batch_size,
+            "num_connections": self.num_connections
         }
         if self.cloud_provider:
             progress_data["cloud_provider"] = self.cloud_provider
@@ -89,7 +94,11 @@ class StatsWriter:
 
         self._write_json(self.progress_file, progress_data)
         # Reset stats
-        stats_data = {"batches": []}
+        stats_data = {
+            "batches": [],
+            "batch_size": self.batch_size,
+            "num_connections": self.num_connections
+        }
         if self.cloud_provider:
             stats_data["cloud_provider"] = self.cloud_provider
         if self.instance_type:
@@ -120,8 +129,10 @@ class StatsWriter:
         progress['last_update'] = datetime.now().isoformat()
         self._write_json(self.progress_file, progress)
 
-        # Save final results with cloud metadata
+        # Save final results with cloud metadata and configuration
         results['completion_time'] = datetime.now().isoformat()
+        results['batch_size'] = self.batch_size
+        results['num_connections'] = self.num_connections
         if self.cloud_provider:
             results['cloud_provider'] = self.cloud_provider
         if self.instance_type:

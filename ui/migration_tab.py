@@ -7,6 +7,7 @@ import pandas as pd
 import time
 import subprocess
 import os
+import json
 from pathlib import Path
 from services.migration.stats_writer import StatsWriter
 
@@ -70,16 +71,30 @@ def render_migration_tab():
                 st.markdown("""
                 마이그레이션을 실행하려면 터미널에서 다음 명령어를 실행하세요:
 
+                **기본 실행 (배치 1000개, 단일 커넥션):**
                 ```bash
                 python migrate_cli.py
                 ```
 
-                또는 가상환경을 사용하는 경우:
-
+                **배치 크기 변경 (100개):**
                 ```bash
-                source venv/bin/activate
-                python migrate_cli.py
+                python migrate_cli.py --batch-size 100
                 ```
+
+                **멀티 커넥션 (10개):**
+                ```bash
+                python migrate_cli.py --connections 10
+                ```
+
+                **배치 100개 + 커넥션 10개:**
+                ```bash
+                python migrate_cli.py --batch-size 100 --connections 10
+                ```
+
+                **옵션:**
+                - `--batch-size`: 배치 크기 (100, 500, 1000, 2000, 5000)
+                - `--connections`: 동시 커넥션 수 (1, 2, 5, 10)
+                - `--output-dir`: 통계 저장 디렉토리
                 """)
 
                 # 간편 실행 버튼 (선택사항)
@@ -143,6 +158,16 @@ def render_migration_tab():
         st.info("💤 마이그레이션이 시작되지 않았습니다.")
     elif status == 'running':
         st.success("🏃 마이그레이션 진행 중...")
+
+        # Configuration info
+        batch_size = progress.get('batch_size', 'N/A')
+        num_connections = progress.get('num_connections', 'N/A')
+
+        col_config1, col_config2 = st.columns(2)
+        with col_config1:
+            st.info(f"⚙️ **배치 크기:** {batch_size}")
+        with col_config2:
+            st.info(f"🔗 **커넥션 수:** {num_connections}")
 
         # Progress metrics
         col_a, col_b, col_c = st.columns(3)
@@ -208,6 +233,18 @@ def render_migration_tab():
         st.success("✅ 마이그레이션 완료!")
 
         if results:
+            # Configuration summary
+            batch_size = results.get('batch_size', 'N/A')
+            num_connections = results.get('num_connections', 'N/A')
+
+            col_cfg1, col_cfg2 = st.columns(2)
+            with col_cfg1:
+                st.metric("배치 크기", batch_size)
+            with col_cfg2:
+                st.metric("커넥션 수", num_connections)
+
+            st.markdown("---")
+
             # Summary metrics
             col_a, col_b, col_c, col_d = st.columns(4)
             with col_a:
@@ -322,3 +359,59 @@ def render_migration_tab():
         if st.button("🔄 상태 초기화"):
             stats_writer.clear_all()
             st.experimental_rerun()
+
+    # Historical comparison section
+    st.markdown("---")
+    st.subheader("📊 성능 비교 분석")
+
+    # Check for historical results
+    output_dir = Path("migration_outputs")
+    if output_dir.exists():
+        results_file = output_dir / "migration_results.json"
+
+        if results_file.exists():
+            try:
+                with open(results_file, 'r') as f:
+                    current_results = json.load(f)
+
+                if current_results.get('status') == 'completed':
+                    st.markdown("##### 현재 실행 설정 성능 요약")
+
+                    # Display configuration and performance
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("배치 크기", current_results.get('batch_size', 'N/A'))
+                    with col2:
+                        st.metric("커넥션 수", current_results.get('num_connections', 'N/A'))
+                    with col3:
+                        avg_rps = current_results.get('average_records_per_second', 0)
+                        st.metric("평균 처리량", f"{avg_rps:.1f} rec/s")
+                    with col4:
+                        total_time = current_results.get('total_duration_seconds', 0)
+                        st.metric("총 소요 시간", f"{total_time:.2f}초")
+
+                    st.markdown("""
+                    **성능 테스트 권장 시나리오:**
+
+                    1. **기본 설정 (baseline)**: `--batch-size 1000 --connections 1`
+                    2. **작은 배치**: `--batch-size 100 --connections 1`
+                    3. **멀티 커넥션**: `--batch-size 1000 --connections 10`
+                    4. **작은 배치 + 멀티 커넥션**: `--batch-size 100 --connections 10`
+
+                    각 설정으로 마이그레이션을 실행하여 최적의 성능을 찾으세요!
+                    """)
+
+                    # Tips
+                    st.info("""
+                    💡 **성능 최적화 팁:**
+                    - **배치 크기가 작을수록**: 네트워크 왕복 횟수가 증가하지만, 각 트랜잭션이 빨라집니다
+                    - **배치 크기가 클수록**: 네트워크 왕복이 줄지만, 각 트랜잭션이 오래 걸립니다
+                    - **멀티 커넥션**: CPU 코어를 활용하여 병렬 처리하지만, DB 부하가 증가합니다
+                    - **최적 설정**: 데이터 특성과 네트워크 환경에 따라 다릅니다
+                    """)
+                else:
+                    st.info("완료된 마이그레이션 결과가 없습니다. 마이그레이션을 먼저 실행하세요.")
+            except Exception as e:
+                st.warning(f"결과 파일을 읽을 수 없습니다: {e}")
+        else:
+            st.info("아직 실행된 마이그레이션이 없습니다.")

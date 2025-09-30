@@ -14,10 +14,12 @@ from datetime import datetime
 
 
 class StreamlitDataMigrator:
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, batch_size=1000, num_connections=1):
         self.conn = None
         self.logger = logger or logging.getLogger(__name__)
         self.batch_performance_stats = []
+        self.batch_size = batch_size
+        self.num_connections = num_connections
         self.connect_to_db()
 
     def connect_to_db(self):
@@ -96,10 +98,14 @@ class StreamlitDataMigrator:
 
         return prepared_data
 
-    def insert_batch(self, table_name: str, records: List[Dict[str, Any]], batch_size: int = 100) -> int:
+    def insert_batch(self, table_name: str, records: List[Dict[str, Any]], batch_size: int = None) -> int:
         """Insert records in batches with performance monitoring"""
         if not records:
             return 0
+
+        # Use instance batch_size if not provided
+        if batch_size is None:
+            batch_size = self.batch_size
 
         table_columns = self.get_table_columns(table_name)
         if not table_columns:

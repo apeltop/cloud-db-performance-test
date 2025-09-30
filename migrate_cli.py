@@ -10,10 +10,13 @@ import psycopg2
 import psycopg2.extras
 import time
 import logging
+import argparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from services.migration.stats_writer import StatsWriter
 
 # Load environment variables
@@ -34,13 +37,16 @@ logger = logging.getLogger(__name__)
 class CLIDataMigrator:
     """Command-line data migrator with stats output"""
 
-    def __init__(self, output_dir: str = "migration_outputs"):
+    def __init__(self, output_dir: str = "migration_outputs", batch_size: int = 1000, num_connections: int = 1):
         self.conn = None
         self.cloud_provider = os.getenv('CLOUD_PROVIDER', 'Unknown')
         self.instance_type = os.getenv('INSTANCE_TYPE', 'Unknown')
         self.env = os.getenv('ENV', 'CLOUD POSTGRESQL')
-        self.stats_writer = StatsWriter(output_dir, self.cloud_provider, self.instance_type)
+        self.batch_size = batch_size
+        self.num_connections = num_connections
+        self.stats_writer = StatsWriter(output_dir, self.cloud_provider, self.instance_type, batch_size, num_connections)
         self.batch_performance_stats = []
+        self.stats_lock = Lock()
         self.connect_to_db()
 
     def connect_to_db(self):
@@ -58,6 +64,17 @@ class CLIDataMigrator:
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             raise
+
+    def create_connection(self):
+        """Create a new database connection for parallel processing"""
+        return psycopg2.connect(
+            host=os.getenv('GCP_DB_HOST'),
+            port=os.getenv('GCP_DB_PORT', 5432),
+            database=os.getenv('GCP_DB_NAME'),
+            user=os.getenv('GCP_DB_USER'),
+            password=os.getenv('GCP_DB_PASSWORD'),
+            sslmode='require'
+        )
 
     def get_table_name_from_filename(self, filename: str) -> Optional[str]:
         """Extract table name from filename"""
@@ -110,10 +127,158 @@ class CLIDataMigrator:
 
         return prepared_data
 
-    def insert_batch(self, table_name: str, records: List[Dict[str, Any]], batch_size: int = 1000) -> int:
-        """Insert records in batches with performance monitoring"""
+    def _insert_batch_worker(self, conn, table_name: str, table_columns: List[str],
+                            batch_records: List[Dict[str, Any]], batch_number: int,
+                            start_offset: int) -> Dict[str, Any]:
+        """Worker function to insert a single batch using a dedicated connection"""
+        batch_start_time = time.time()
+
+        try:
+            cur = conn.cursor()
+            batch_data = []
+
+            for record in batch_records:
+                prepared_data = self.prepare_record_data(record, table_columns)
+                batch_data.append(prepared_data)
+
+            if batch_data:
+                # Quote column names to preserve case sensitivity
+                quoted_columns = ', '.join([f'"{col}"' for col in table_columns])
+                placeholders = ', '.join([f'%({col})s' for col in table_columns])
+
+                # Add timestamp columns
+                quoted_columns += ', "createdAt", "updatedAt"'
+                placeholders += ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP'
+
+                insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
+
+                # Handle special case for opn_std_scsbid_info table
+                if table_name == 'opn_std_scsbid_info':
+                    for j, data in enumerate(batch_data):
+                        data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{start_offset+j+1}"
+
+                    quoted_columns = '"id", ' + quoted_columns
+                    placeholders = '%(id)s, ' + placeholders
+                    insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
+
+                # Execute batch
+                cur.executemany(insert_sql, batch_data)
+                conn.commit()
+
+            cur.close()
+            batch_end_time = time.time()
+
+            # Calculate performance metrics
+            batch_duration = batch_end_time - batch_start_time
+            records_per_second = len(batch_data) / batch_duration if batch_duration > 0 else 0
+
+            return {
+                "success": True,
+                "batch_number": batch_number,
+                "table_name": table_name,
+                "records_count": len(batch_data),
+                "start_time": datetime.fromtimestamp(batch_start_time).isoformat(),
+                "end_time": datetime.fromtimestamp(batch_end_time).isoformat(),
+                "total_duration_seconds": batch_duration,
+                "records_per_second": records_per_second
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to insert batch {batch_number} into {table_name}: {e}")
+            conn.rollback()
+            return {
+                "success": False,
+                "batch_number": batch_number,
+                "error": str(e)
+            }
+
+    def _insert_batch_parallel(self, table_name: str, records: List[Dict[str, Any]],
+                               batch_size: int, table_columns: List[str]) -> int:
+        """Insert records using multiple parallel connections"""
+        total_inserted = 0
+
+        # Split records into batches
+        batches = []
+        for i in range(0, len(records), batch_size):
+            batch = records[i:i + batch_size]
+            batch_number = i // batch_size + 1
+            batches.append((batch, batch_number, i))
+
+        logger.info(f"Processing {len(batches)} batches using {self.num_connections} connections")
+
+        # Process batches in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=self.num_connections) as executor:
+            # Submit all batch jobs
+            future_to_batch = {}
+            for batch_records, batch_number, start_offset in batches:
+                # Create a new connection for this worker
+                conn = self.create_connection()
+                future = executor.submit(
+                    self._insert_batch_worker,
+                    conn, table_name, table_columns, batch_records, batch_number, start_offset
+                )
+                future_to_batch[future] = (batch_number, conn)
+
+            # Collect results as they complete
+            for future in as_completed(future_to_batch):
+                batch_number, conn = future_to_batch[future]
+                try:
+                    result = future.result()
+
+                    if result["success"]:
+                        total_inserted += result["records_count"]
+
+                        # Thread-safe stats collection
+                        with self.stats_lock:
+                            batch_stat = {
+                                "batch_number": result["batch_number"],
+                                "table_name": result["table_name"],
+                                "records_count": result["records_count"],
+                                "start_time": result["start_time"],
+                                "end_time": result["end_time"],
+                                "total_duration_seconds": result["total_duration_seconds"],
+                                "records_per_second": result["records_per_second"],
+                                "cumulative_records": total_inserted
+                            }
+                            self.batch_performance_stats.append(batch_stat)
+
+                            # Write to stats file
+                            self.stats_writer.add_batch_stat(batch_stat)
+
+                            # Update progress
+                            self.stats_writer.update_progress(
+                                current_batch=result["batch_number"],
+                                total_records_processed=total_inserted
+                            )
+
+                        # Log progress
+                        logger.info(f"Batch {result['batch_number']} for {table_name}: "
+                                  f"{result['records_count']} records in "
+                                  f"{result['total_duration_seconds']:.3f}s "
+                                  f"({result['records_per_second']:.1f} rec/s)")
+                    else:
+                        logger.error(f"Batch {batch_number} failed: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    logger.error(f"Exception processing batch {batch_number}: {e}")
+                finally:
+                    # Close the connection
+                    try:
+                        conn.close()
+                    except:
+                        pass
+
+        logger.info(f"Total inserted into {table_name}: {total_inserted} records using {self.num_connections} connections")
+        return total_inserted
+
+    def insert_batch(self, table_name: str, records: List[Dict[str, Any]], batch_size: int = None) -> int:
+        """Insert records in batches with performance monitoring and multi-connection support"""
         if not records:
             return 0
+
+        # Use instance batch_size if not provided
+        if batch_size is None:
+            batch_size = self.batch_size
 
         table_columns = self.get_table_columns(table_name)
         if not table_columns:
@@ -122,6 +287,11 @@ class CLIDataMigrator:
 
         total_inserted = 0
 
+        # Use multi-connection if configured
+        if self.num_connections > 1:
+            return self._insert_batch_parallel(table_name, records, batch_size, table_columns)
+
+        # Single connection implementation (original logic)
         try:
             cur = self.conn.cursor()
 
@@ -360,13 +530,31 @@ class CLIDataMigrator:
 
 def main():
     """Main migration function"""
-    migrator = CLIDataMigrator()
+    parser = argparse.ArgumentParser(description='Database Migration CLI with Performance Testing')
+    parser.add_argument('--batch-size', type=int, default=1000,
+                        choices=[100, 500, 1000, 2000, 5000],
+                        help='Batch size for insert operations (default: 1000)')
+    parser.add_argument('--connections', type=int, default=1,
+                        choices=[1, 2, 5, 10],
+                        help='Number of concurrent database connections (default: 1)')
+    parser.add_argument('--output-dir', type=str, default='migration_outputs',
+                        help='Output directory for statistics (default: migration_outputs)')
+
+    args = parser.parse_args()
+
+    migrator = CLIDataMigrator(
+        output_dir=args.output_dir,
+        batch_size=args.batch_size,
+        num_connections=args.connections
+    )
 
     print("="*60)
     print(f"{migrator.env} DATA MIGRATION - CLI")
     print("="*60)
     print(f"Cloud Provider: {migrator.cloud_provider}")
     print(f"Instance Type: {migrator.instance_type}")
+    print(f"Batch Size: {migrator.batch_size}")
+    print(f"Connections: {migrator.num_connections}")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
