@@ -137,6 +137,8 @@ class CLIDataMigrator:
             cur = conn.cursor()
             batch_data = []
 
+            # Data preparation phase
+            data_prep_start = time.time()
             for record in batch_records:
                 prepared_data = self.prepare_record_data(record, table_columns)
                 batch_data.append(prepared_data)
@@ -161,9 +163,20 @@ class CLIDataMigrator:
                     placeholders = '%(id)s, ' + placeholders
                     insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
 
-                # Execute batch
+                data_prep_end = time.time()
+                data_preparation_time = data_prep_end - data_prep_start
+
+                # Execute batch (query execution phase)
+                query_exec_start = time.time()
                 cur.executemany(insert_sql, batch_data)
+                query_exec_end = time.time()
+                query_execution_time = query_exec_end - query_exec_start
+
+                # Commit phase
+                commit_start = time.time()
                 conn.commit()
+                commit_end = time.time()
+                commit_time = commit_end - commit_start
 
             cur.close()
             batch_end_time = time.time()
@@ -171,6 +184,8 @@ class CLIDataMigrator:
             # Calculate performance metrics
             batch_duration = batch_end_time - batch_start_time
             records_per_second = len(batch_data) / batch_duration if batch_duration > 0 else 0
+            network_db_time = query_execution_time + commit_time
+            overhead_time = batch_duration - data_preparation_time - network_db_time
 
             return {
                 "success": True,
@@ -180,6 +195,11 @@ class CLIDataMigrator:
                 "start_time": datetime.fromtimestamp(batch_start_time).isoformat(),
                 "end_time": datetime.fromtimestamp(batch_end_time).isoformat(),
                 "total_duration_seconds": batch_duration,
+                "data_preparation_time": data_preparation_time,
+                "query_execution_time": query_execution_time,
+                "commit_time": commit_time,
+                "network_db_time": network_db_time,
+                "overhead_time": overhead_time,
                 "records_per_second": records_per_second
             }
 
@@ -237,6 +257,11 @@ class CLIDataMigrator:
                                 "start_time": result["start_time"],
                                 "end_time": result["end_time"],
                                 "total_duration_seconds": result["total_duration_seconds"],
+                                "data_preparation_time": result["data_preparation_time"],
+                                "query_execution_time": result["query_execution_time"],
+                                "commit_time": result["commit_time"],
+                                "network_db_time": result["network_db_time"],
+                                "overhead_time": result["overhead_time"],
                                 "records_per_second": result["records_per_second"],
                                 "cumulative_records": total_inserted
                             }
@@ -302,6 +327,8 @@ class CLIDataMigrator:
                 batch = records[i:i + batch_size]
                 batch_data = []
 
+                # Data preparation phase
+                data_prep_start = time.time()
                 for record in batch:
                     prepared_data = self.prepare_record_data(record, table_columns)
                     batch_data.append(prepared_data)
@@ -326,9 +353,20 @@ class CLIDataMigrator:
                         placeholders = '%(id)s, ' + placeholders
                         insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
 
-                    # Execute batch
+                    data_prep_end = time.time()
+                    data_preparation_time = data_prep_end - data_prep_start
+
+                    # Execute batch (query execution phase)
+                    query_exec_start = time.time()
                     cur.executemany(insert_sql, batch_data)
+                    query_exec_end = time.time()
+                    query_execution_time = query_exec_end - query_exec_start
+
+                    # Commit phase
+                    commit_start = time.time()
                     self.conn.commit()
+                    commit_end = time.time()
+                    commit_time = commit_end - commit_start
 
                     total_inserted += len(batch_data)
                     batch_end_time = time.time()
@@ -336,6 +374,8 @@ class CLIDataMigrator:
                     # Calculate performance metrics
                     batch_duration = batch_end_time - batch_start_time
                     records_per_second = len(batch_data) / batch_duration if batch_duration > 0 else 0
+                    network_db_time = query_execution_time + commit_time
+                    overhead_time = batch_duration - data_preparation_time - network_db_time
 
                     # Store batch performance stats
                     batch_stat = {
@@ -345,6 +385,11 @@ class CLIDataMigrator:
                         "start_time": datetime.fromtimestamp(batch_start_time).isoformat(),
                         "end_time": datetime.fromtimestamp(batch_end_time).isoformat(),
                         "total_duration_seconds": batch_duration,
+                        "data_preparation_time": data_preparation_time,
+                        "query_execution_time": query_execution_time,
+                        "commit_time": commit_time,
+                        "network_db_time": network_db_time,
+                        "overhead_time": overhead_time,
                         "records_per_second": records_per_second,
                         "cumulative_records": total_inserted
                     }
