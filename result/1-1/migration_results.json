@@ -1,0 +1,29 @@
+{
+  "status": "completed",
+  "total_files": 0,
+  "successful": 0,
+  "failed": 0,
+  "total_records": 0,
+  "total_duration_seconds": 1170.4525508880615,
+  "average_records_per_second": 0.0,
+  "file_results": [],
+  "table_counts": {
+    "bid_pblanclistinfo_cnstwk": 10707,
+    "bid_pblanclistinfo_frgcpt": 0,
+    "bid_pblanclistinfo_servc": 0,
+    "bid_pblanclistinfo_thng": 0,
+    "opn_std_scsbid_info": 0
+  },
+  "initial_counts": {
+    "bid_pblanclistinfo_cnstwk": 0,
+    "bid_pblanclistinfo_frgcpt": 0,
+    "bid_pblanclistinfo_servc": 0,
+    "bid_pblanclistinfo_thng": 0,
+    "opn_std_scsbid_info": 0
+  },
+  "completion_time": "2025-10-01T22:32:28.360435",
+  "batch_size": 1,
+  "num_connections": 1,
+  "cloud_provider": "GCP",
+  "instance_type": "db-custom-1-3840"
+}
