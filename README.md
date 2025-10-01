@@ -39,27 +39,19 @@
 cloud-db-performance-test/
 ├── app.py                           # Streamlit 메인 대시보드
 ├── migrate_cli.py                   # CLI 마이그레이션 도구 (멀티커넥션 지원)
-├── data_migration.py                # 기본 마이그레이션 스크립트
 ├── requirements.txt                 # Python 의존성
 ├── .env                             # 환경 변수 (DB 연결 정보)
 ├── README.md                        # 프로젝트 문서
-├── config/
-│   ├── config_loader.py             # 설정 로더
-│   ├── database.yaml                # DB 연결 설정
-│   └── schema.json                  # 데이터 스키마 설정
 ├── services/
-│   ├── db_manager.py                # 데이터베이스 관리자
-│   ├── data_processor.py            # 데이터 처리기
 │   └── migration/
-│       ├── migrator.py              # Streamlit용 마이그레이터
+│       ├── migrator.py              # 마이그레이션 도구
 │       ├── logger.py                # 마이그레이션 로거
 │       └── stats_writer.py          # 통계 파일 작성기
 ├── ui/
-│   ├── migration_tab.py             # 마이그레이션 모니터링 탭
-│   ├── performance_tab.py           # 성능 비교 탭
-│   └── analysis_tab.py              # 상세 분석 탭
+│   ├── migration_tab.py             # 마이그레이션 탭
+│   ├── analysis_tab.py              # 상세 분석 탭
+│   └── sidebar.py                   # 사이드바
 ├── utils/
-│   ├── helpers.py                   # 유틸리티 함수
 │   └── session_state.py             # Streamlit 세션 상태 관리
 ├── data/                            # JSON 데이터 파일
 │   ├── BidPublicInfoService_BID_CNSTWK_*.json

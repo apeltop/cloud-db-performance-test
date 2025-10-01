@@ -26,6 +26,3 @@ def initialize_session_state():
         st.session_state.migration_migrator = None
     if 'migration_initial_counts' not in st.session_state:
         st.session_state.migration_initial_counts = {}
-    if 'config_loader' not in st.session_state:
-        from config.config_loader import ConfigLoader
-        st.session_state.config_loader = ConfigLoader()

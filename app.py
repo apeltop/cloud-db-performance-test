@@ -22,9 +22,6 @@ st.markdown("클라우드 3사(GCP, Azure, AWS) PostgreSQL 성능 비교 도구"
 
 st.markdown("---")
 
-# Get config loader from session state
-config_loader = st.session_state.config_loader
-
 # Render sidebar
 render_sidebar()
 
