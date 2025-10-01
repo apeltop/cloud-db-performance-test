@@ -6,10 +6,6 @@ import streamlit as st
 
 def initialize_session_state():
     """Initialize all session state variables"""
-    if 'processing_stats' not in st.session_state:
-        st.session_state.processing_stats = None
-    if 'data_processor' not in st.session_state:
-        st.session_state.data_processor = None
     if 'migration_in_progress' not in st.session_state:
         st.session_state.migration_in_progress = False
     if 'current_batch_stats' not in st.session_state:

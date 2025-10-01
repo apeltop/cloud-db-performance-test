@@ -4,7 +4,6 @@ import streamlit as st
 from utils.session_state import initialize_session_state
 from ui.sidebar import render_sidebar
 from ui.migration_tab import render_migration_tab
-from ui.performance_tab import render_performance_tab
 from ui.analysis_tab import render_analysis_tab
 
 # 페이지 설정
@@ -30,15 +29,12 @@ config_loader = st.session_state.config_loader
 render_sidebar()
 
 # 메인 콘텐츠
-tab1, tab2, tab3 = st.tabs(["🔄 데이터 마이그레이션", "📊 성능 비교", "📈 상세 분석"])
+tab1, tab2 = st.tabs(["🔄 데이터 마이그레이션", "📈 상세 분석"])
 
 with tab1:
     render_migration_tab()
 
 with tab2:
-    render_performance_tab()
-
-with tab3:
     render_analysis_tab()
 
 # 푸터
