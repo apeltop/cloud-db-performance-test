@@ -18,6 +18,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from services.migration.stats_writer import StatsWriter
+from services.migration.test_run_manager import TestRunManager
 
 # Load environment variables
 load_dotenv()
@@ -37,16 +38,40 @@ logger = logging.getLogger(__name__)
 class CLIDataMigrator:
     """Command-line data migrator with stats output"""
 
-    def __init__(self, output_dir: str = "migration_outputs", batch_size: int = 1000, num_connections: int = 1):
+    def __init__(self, batch_size: int = 1000, num_connections: int = 1, max_records: int = None):
         self.conn = None
         self.cloud_provider = os.getenv('CLOUD_PROVIDER', 'Unknown')
         self.instance_type = os.getenv('INSTANCE_TYPE', 'Unknown')
         self.env = os.getenv('ENV', 'CLOUD POSTGRESQL')
         self.batch_size = batch_size
         self.num_connections = num_connections
-        self.stats_writer = StatsWriter(output_dir, self.cloud_provider, self.instance_type, batch_size, num_connections)
+        self.max_records = max_records
+        self.total_records_inserted = 0
+        self.max_records_reached = False
         self.batch_performance_stats = []
         self.stats_lock = Lock()
+
+        # Initialize test run manager and create new test run
+        self.test_manager = TestRunManager()
+        self.test_run = self.test_manager.create_test_run(
+            cloud_provider=self.cloud_provider,
+            instance_type=self.instance_type,
+            batch_size=batch_size,
+            num_connections=num_connections
+        )
+
+        # Get output directory for this test run
+        test_output_dir = self.test_manager.get_test_output_dir(self.test_run.test_id)
+
+        # Initialize stats writer with test-specific output directory
+        self.stats_writer = StatsWriter(
+            str(test_output_dir),
+            self.cloud_provider,
+            self.instance_type,
+            batch_size,
+            num_connections
+        )
+
         self.connect_to_db()
 
     def connect_to_db(self):
@@ -78,15 +103,7 @@ class CLIDataMigrator:
 
     def get_table_name_from_filename(self, filename: str) -> Optional[str]:
         """Extract table name from filename"""
-        if filename.startswith("BidPublicInfoService_BID_CNSTWK_"):
-            return "bid_pblanclistinfo_cnstwk"
-        elif filename.startswith("BidPublicInfoService_BID_SERVC_"):
-            return "bid_pblanclistinfo_servc"
-        elif filename.startswith("BidPublicInfoService_BID_THNG_"):
-            return "bid_pblanclistinfo_thng"
-        elif filename.startswith("BidPublicInfoService_BID_FRGCPT_"):
-            return "bid_pblanclistinfo_frgcpt"
-        elif filename.startswith("PubDataOpnStdService_ScsBidInfo_"):
+        if filename.startswith("PubDataOpnStdService_ScsBidInfo_"):
             return "opn_std_scsbid_info"
         else:
             logger.warning(f"Unknown file pattern: {filename}")
@@ -118,7 +135,8 @@ class CLIDataMigrator:
         for column in table_columns:
             if column in record:
                 value = record[column]
-                if value is None:
+                # Treat None and empty strings as NULL
+                if value is None or value == '':
                     prepared_data[column] = None
                 else:
                     prepared_data[column] = str(value) if not isinstance(value, str) else value
@@ -144,24 +162,19 @@ class CLIDataMigrator:
                 batch_data.append(prepared_data)
 
             if batch_data:
+                # Generate composite ID for each record
+                for j, data in enumerate(batch_data):
+                    data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{start_offset+j+1}"
+
                 # Quote column names to preserve case sensitivity
-                quoted_columns = ', '.join([f'"{col}"' for col in table_columns])
-                placeholders = ', '.join([f'%({col})s' for col in table_columns])
+                quoted_columns = '"id", ' + ', '.join([f'"{col}"' for col in table_columns])
+                placeholders = '%(id)s, ' + ', '.join([f'%({col})s' for col in table_columns])
 
                 # Add timestamp columns
                 quoted_columns += ', "createdAt", "updatedAt"'
                 placeholders += ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP'
 
                 insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
-
-                # Handle special case for opn_std_scsbid_info table
-                if table_name == 'opn_std_scsbid_info':
-                    for j, data in enumerate(batch_data):
-                        data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{start_offset+j+1}"
-
-                    quoted_columns = '"id", ' + quoted_columns
-                    placeholders = '%(id)s, ' + placeholders
-                    insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
 
                 data_prep_end = time.time()
                 data_preparation_time = data_prep_end - data_prep_start
@@ -217,10 +230,26 @@ class CLIDataMigrator:
         """Insert records using multiple parallel connections"""
         total_inserted = 0
 
-        # Split records into batches
+        # Split records into batches, considering max_records limit
         batches = []
         for i in range(0, len(records), batch_size):
+            # Check if we've already reached the max_records limit
+            if self.max_records and self.total_records_inserted >= self.max_records:
+                self.max_records_reached = True
+                break
+
             batch = records[i:i + batch_size]
+
+            # If this batch would exceed max_records, trim it
+            if self.max_records and self.total_records_inserted + len(batch) > self.max_records:
+                remaining = self.max_records - self.total_records_inserted
+                batch = batch[:remaining]
+                batch_number = i // batch_size + 1
+                batches.append((batch, batch_number, i))
+                self.max_records_reached = True
+                logger.info(f"Trimming final batch to {remaining} records to reach max limit of {self.max_records:,}")
+                break
+
             batch_number = i // batch_size + 1
             batches.append((batch, batch_number, i))
 
@@ -247,6 +276,7 @@ class CLIDataMigrator:
 
                     if result["success"]:
                         total_inserted += result["records_count"]
+                        self.total_records_inserted += result["records_count"]
 
                         # Thread-safe stats collection
                         with self.stats_lock:
@@ -281,6 +311,11 @@ class CLIDataMigrator:
                                   f"{result['records_count']} records in "
                                   f"{result['total_duration_seconds']:.3f}s "
                                   f"({result['records_per_second']:.1f} rec/s)")
+
+                        # Check if max_records reached after this batch
+                        if self.max_records and self.total_records_inserted >= self.max_records:
+                            self.max_records_reached = True
+                            logger.info(f"Maximum record limit ({self.max_records:,}) reached in parallel processing.")
                     else:
                         logger.error(f"Batch {batch_number} failed: {result.get('error', 'Unknown error')}")
 
@@ -321,10 +356,24 @@ class CLIDataMigrator:
             cur = self.conn.cursor()
 
             for i in range(0, len(records), batch_size):
+                # Check if max_records limit reached
+                if self.max_records and self.total_records_inserted >= self.max_records:
+                    self.max_records_reached = True
+                    logger.info(f"Maximum record limit ({self.max_records:,}) reached. Stopping batch processing.")
+                    break
+
                 batch_start_time = time.time()
                 batch_number = i // batch_size + 1
 
                 batch = records[i:i + batch_size]
+
+                # If this batch would exceed max_records, trim it
+                if self.max_records and self.total_records_inserted + len(batch) > self.max_records:
+                    remaining = self.max_records - self.total_records_inserted
+                    batch = batch[:remaining]
+                    self.max_records_reached = True
+                    logger.info(f"Trimming batch to {remaining} records to reach max limit of {self.max_records:,}")
+
                 batch_data = []
 
                 # Data preparation phase
@@ -334,24 +383,19 @@ class CLIDataMigrator:
                     batch_data.append(prepared_data)
 
                 if batch_data:
+                    # Generate composite ID for each record
+                    for j, data in enumerate(batch_data):
+                        data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{i+j+1}"
+
                     # Quote column names to preserve case sensitivity
-                    quoted_columns = ', '.join([f'"{col}"' for col in table_columns])
-                    placeholders = ', '.join([f'%({col})s' for col in table_columns])
+                    quoted_columns = '"id", ' + ', '.join([f'"{col}"' for col in table_columns])
+                    placeholders = '%(id)s, ' + ', '.join([f'%({col})s' for col in table_columns])
 
                     # Add timestamp columns
                     quoted_columns += ', "createdAt", "updatedAt"'
                     placeholders += ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP'
 
                     insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
-
-                    # Handle special case for opn_std_scsbid_info table
-                    if table_name == 'opn_std_scsbid_info':
-                        for j, data in enumerate(batch_data):
-                            data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{i+j+1}"
-
-                        quoted_columns = '"id", ' + quoted_columns
-                        placeholders = '%(id)s, ' + placeholders
-                        insert_sql = f"INSERT INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
 
                     data_prep_end = time.time()
                     data_preparation_time = data_prep_end - data_prep_start
@@ -369,6 +413,7 @@ class CLIDataMigrator:
                     commit_time = commit_end - commit_start
 
                     total_inserted += len(batch_data)
+                    self.total_records_inserted += len(batch_data)
                     batch_end_time = time.time()
 
                     # Calculate performance metrics
@@ -406,6 +451,10 @@ class CLIDataMigrator:
 
                     # Log progress
                     logger.info(f"Batch {batch_number} for {table_name}: {len(batch_data)} records in {batch_duration:.3f}s ({records_per_second:.1f} rec/s)")
+
+                    # Break if max_records reached
+                    if self.max_records_reached:
+                        break
 
             cur.close()
             logger.info(f"Total inserted into {table_name}: {total_inserted} records")
@@ -496,6 +545,12 @@ class CLIDataMigrator:
                 else:
                     logger.warning(f"✗ {result['filename']}: {result.get('reason', 'unknown error')}")
 
+                # Check if max_records limit reached
+                if self.max_records_reached:
+                    logger.info(f"Maximum record limit ({self.max_records:,}) reached. Stopping migration.")
+                    logger.info(f"Total records inserted: {self.total_records_inserted:,}")
+                    break
+
             except KeyboardInterrupt:
                 logger.info("Migration interrupted by user")
                 self.stats_writer.error_migration("Interrupted by user")
@@ -527,6 +582,11 @@ class CLIDataMigrator:
         print(f"Skipped: {len(skipped)}")
         print(f"Total records inserted: {total_records:,}")
 
+        if self.max_records:
+            print(f"Maximum records limit: {self.max_records:,}")
+            if self.max_records_reached:
+                print("⚠️  LIMIT REACHED: Migration stopped due to max_records limit")
+
         if successful:
             print("\n✓ SUCCESSFUL FILES:")
             for result in successful:
@@ -546,13 +606,7 @@ class CLIDataMigrator:
 
     def get_table_counts(self) -> Dict[str, int]:
         """Get record counts for all tables"""
-        tables = [
-            'bid_pblanclistinfo_cnstwk',
-            'bid_pblanclistinfo_frgcpt',
-            'bid_pblanclistinfo_servc',
-            'bid_pblanclistinfo_thng',
-            'opn_std_scsbid_info'
-        ]
+        tables = ['opn_std_scsbid_info']
 
         counts = {}
         try:
@@ -577,20 +631,22 @@ def main():
     """Main migration function"""
     parser = argparse.ArgumentParser(description='Database Migration CLI with Performance Testing')
     parser.add_argument('--batch-size', type=int, default=1000,
-                        choices=[100, 500, 1000, 2000, 5000],
+                        choices=[10, 100, 500, 1000, 2000, 5000],
                         help='Batch size for insert operations (default: 1000)')
     parser.add_argument('--connections', type=int, default=1,
                         choices=[1, 2, 5, 10],
                         help='Number of concurrent database connections (default: 1)')
-    parser.add_argument('--output-dir', type=str, default='migration_outputs',
-                        help='Output directory for statistics (default: migration_outputs)')
+    parser.add_argument('--max-records', type=int, default=None,
+                        help='Maximum number of records to insert (default: no limit)')
+    parser.add_argument('--data-dir', type=str, default='data',
+                        help='Data directory containing JSON files (default: data)')
 
     args = parser.parse_args()
 
     migrator = CLIDataMigrator(
-        output_dir=args.output_dir,
         batch_size=args.batch_size,
-        num_connections=args.connections
+        num_connections=args.connections,
+        max_records=args.max_records
     )
 
     print("="*60)
@@ -600,6 +656,8 @@ def main():
     print(f"Instance Type: {migrator.instance_type}")
     print(f"Batch Size: {migrator.batch_size}")
     print(f"Connections: {migrator.num_connections}")
+    if migrator.max_records:
+        print(f"Max Records Limit: {migrator.max_records:,}")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
@@ -613,7 +671,7 @@ def main():
         # Run migration
         print("\n🚀 Starting migration...\n")
         start_time = time.time()
-        results = migrator.migrate_all_files()
+        results = migrator.migrate_all_files(data_dir=args.data_dir)
         end_time = time.time()
 
         # Show final results
@@ -644,19 +702,31 @@ def main():
             "average_records_per_second": total_records / total_duration if total_duration > 0 else 0,
             "file_results": results,
             "table_counts": final_counts,
-            "initial_counts": initial_counts
+            "initial_counts": initial_counts,
+            "max_records_limit": migrator.max_records,
+            "max_records_reached": migrator.max_records_reached
         }
 
         migrator.stats_writer.complete_migration(final_results)
 
+        # Update test run manager with completion data
+        migrator.test_manager.complete_test_run(
+            migrator.test_run.test_id,
+            total_records=total_records,
+            total_duration_seconds=total_duration,
+            average_records_per_second=total_records / total_duration if total_duration > 0 else 0
+        )
+
         print(f"\n⏱️  Total migration time: {total_duration:.2f} seconds")
         print(f"📈 Average throughput: {total_records / total_duration:.1f} records/second")
-        print(f"\n✅ Statistics saved to: migration_outputs/")
+        print(f"\n✅ Test ID: {migrator.test_run.test_id}")
+        print(f"✅ Statistics saved to: {migrator.test_manager.get_test_output_dir(migrator.test_run.test_id)}")
         print("="*60)
 
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         migrator.stats_writer.error_migration(str(e))
+        migrator.test_manager.error_test_run(migrator.test_run.test_id, str(e))
         raise
     finally:
         migrator.close()

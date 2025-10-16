@@ -8,20 +8,43 @@ import plotly.graph_objects as go
 import json
 import os
 from datetime import datetime
+from pathlib import Path
+from services.migration.test_run_manager import TestRunManager
 
 
-def load_saved_migration_stats():
+def load_saved_migration_stats(test_output_dir: Path = None):
     """Load saved migration statistics from file"""
-    stats_file = "migration_outputs/migration_stats.json"
-    if os.path.exists(stats_file):
+    if test_output_dir:
+        stats_file = test_output_dir / "migration_stats.json"
+    else:
+        stats_file = Path("migration_outputs/migration_stats.json")
+
+    if stats_file.exists():
         try:
             with open(stats_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data.get('batches', []), stats_file
+                return data.get('batches', []), str(stats_file)
         except Exception as e:
             st.error(f"통계 파일 로드 중 오류 발생: {e}")
             return [], None
     return [], None
+
+
+def load_test_results(test_output_dir: Path = None):
+    """Load test results from file"""
+    if test_output_dir:
+        results_file = test_output_dir / "migration_results.json"
+    else:
+        results_file = Path("migration_outputs/migration_results.json")
+
+    if results_file.exists():
+        try:
+            with open(results_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"결과 파일 로드 중 오류 발생: {e}")
+            return None
+    return None
 
 
 def render_batch_statistics(batch_stats, data_source="real-time", file_path=None):
@@ -206,89 +229,85 @@ def render_analysis_tab():
     """Render detailed analysis tab"""
     st.header("📈 상세 분석")
 
-    # Load and display file results from migration
-    st.subheader("📁 파일별 마이그레이션 결과")
+    # Initialize test run manager
+    test_manager = TestRunManager()
 
-    results_file = "migration_outputs/migration_results.json"
-    if os.path.exists(results_file):
-        try:
-            with open(results_file, 'r', encoding='utf-8') as f:
-                results = json.load(f)
+    # Get all completed test runs
+    all_test_runs = test_manager.get_test_runs_by_status("completed")
 
-            if results.get('status') == 'completed':
-                # Summary metrics
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    st.metric("총 파일", results.get('total_files', 0))
-                with col_b:
-                    st.metric("✅ 성공", results.get('successful', 0))
-                with col_c:
-                    st.metric("❌ 실패", results.get('failed', 0))
+    if not all_test_runs:
+        st.info("완료된 테스트가 없습니다. CLI를 통해 마이그레이션을 먼저 실행하세요.")
+        st.code("python migrate_cli.py --batch-size 1000 --connections 1")
+        return
 
-                # File results table
-                file_results = results.get('file_results', [])
-                if file_results:
-                    df_file_results = pd.DataFrame(file_results)
-                    # Select and rename columns
-                    display_cols = ['filename', 'table', 'status', 'records_inserted']
-                    df_display = df_file_results[display_cols].copy()
-                    df_display.columns = ['파일명', '테이블', '상태', '삽입된 레코드']
-                    df_display['상태'] = df_display['상태'].map({
-                        'success': '✅ 성공',
-                        'error': '❌ 실패',
-                        'skipped': '⚠️ 건너뜀'
-                    })
-                    st.dataframe(df_display, use_container_width=True)
-                else:
-                    st.info("파일별 결과 데이터가 없습니다.")
-            else:
-                st.info("완료된 마이그레이션 결과가 없습니다. 마이그레이션을 먼저 실행하세요.")
-        except Exception as e:
-            st.error(f"결과 파일 로드 중 오류 발생: {e}")
-    else:
-        st.info("마이그레이션 결과 파일이 없습니다. CLI를 통해 마이그레이션을 먼저 실행하세요.")
+    # Test selection dropdown
+    st.subheader("🎯 분석할 테스트 선택")
+
+    test_options = {}
+    for tr in all_test_runs:
+        label = f"{tr['timestamp'][:19]} - {tr['cloud_provider']} {tr['instance_type']} (batch:{tr['batch_size']}, conn:{tr['num_connections']}) - {tr.get('average_records_per_second', 0):.0f} rec/s"
+        test_options[label] = tr['test_id']
+
+    selected_label = st.selectbox(
+        "테스트를 선택하세요",
+        options=list(test_options.keys()),
+        index=0
+    )
+
+    selected_test_id = test_options[selected_label]
+    selected_test = test_manager.get_test_run(selected_test_id)
+    test_output_dir = test_manager.get_test_output_dir(selected_test_id)
+
+    if not test_output_dir:
+        st.error("테스트 출력 디렉토리를 찾을 수 없습니다.")
+        return
 
     st.markdown("---")
 
-    # Check if migration is in progress or has batch stats
-    if st.session_state.migration_in_progress or st.session_state.current_batch_stats:
-        st.subheader("🚀 실시간 마이그레이션 성능 모니터링")
+    # Load and display file results from migration
+    st.subheader("📁 파일별 마이그레이션 결과")
 
-        # Show migration progress if in progress
-        if st.session_state.migration_in_progress:
-            progress = st.session_state.migration_progress
+    results = load_test_results(test_output_dir)
+    if results:
+        if results.get('status') == 'completed':
+            # Summary metrics
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric("총 파일", results.get('total_files', 0))
+            with col_b:
+                st.metric("✅ 성공", results.get('successful', 0))
+            with col_c:
+                st.metric("❌ 실패", results.get('failed', 0))
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("현재 파일", progress.get('current_file', 'N/A'))
-            with col2:
-                files_progress = f"{progress.get('files_completed', 0)}/{progress.get('total_files', 0)}"
-                st.metric("파일 진행률", files_progress)
-            with col3:
-                current_batch = progress.get('current_batch', 0)
-                st.metric("현재 배치", current_batch)
-
-            # Auto-refresh control
-            if st.button("🔄 새로고침", key="refresh_migration"):
-                st.rerun()
-
-        # Display real-time batch statistics
-        if st.session_state.current_batch_stats:
-            batch_stats = st.session_state.current_batch_stats
-
-            if batch_stats:
-                st.markdown("---")
-                st.subheader("📊 실시간 배치 성능")
-                render_batch_statistics(batch_stats, data_source="real-time")
-
-        st.markdown("---")
-
-    # Load and display saved migration statistics if available
-    if not st.session_state.migration_in_progress and not st.session_state.current_batch_stats:
-        saved_stats, stats_file = load_saved_migration_stats()
-
-        if saved_stats:
-            st.subheader("📊 저장된 마이그레이션 배치 통계")
-            render_batch_statistics(saved_stats, data_source="saved", file_path=stats_file)
+            # File results table
+            file_results = results.get('file_results', [])
+            if file_results:
+                df_file_results = pd.DataFrame(file_results)
+                # Select and rename columns
+                display_cols = ['filename', 'table', 'status', 'records_inserted']
+                df_display = df_file_results[display_cols].copy()
+                df_display.columns = ['파일명', '테이블', '상태', '삽입된 레코드']
+                df_display['상태'] = df_display['상태'].map({
+                    'success': '✅ 성공',
+                    'error': '❌ 실패',
+                    'skipped': '⚠️ 건너뜀'
+                })
+                st.dataframe(df_display, use_container_width=True)
+            else:
+                st.info("파일별 결과 데이터가 없습니다.")
         else:
-            st.info("테스트를 실행하거나 데이터 마이그레이션을 시작하면 상세 분석이 여기에 표시됩니다.")
+            st.info("완료된 마이그레이션 결과가 없습니다.")
+    else:
+        st.info("마이그레이션 결과 파일이 없습니다.")
+
+    st.markdown("---")
+
+    # Load and display batch statistics for selected test
+    st.subheader("📊 배치 성능 통계")
+
+    saved_stats, stats_file = load_saved_migration_stats(test_output_dir)
+
+    if saved_stats:
+        render_batch_statistics(saved_stats, data_source="saved", file_path=stats_file)
+    else:
+        st.info("선택한 테스트의 배치 통계를 찾을 수 없습니다.")

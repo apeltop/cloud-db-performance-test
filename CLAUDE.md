@@ -41,41 +41,69 @@ The project has two independent execution paths:
 
 1. **CLI Mode** (`migrate_cli.py` + `CLIDataMigrator`):
    - Direct execution with command-line arguments
-   - Writes statistics to JSON files in `migration_outputs/`
-   - Supports multi-connection parallel processing via ThreadPoolExecutor
+   - Each test run creates unique output directory in `migration_outputs/runs/{test_id}/`
+   - Test metadata tracked in `migration_outputs/test_runs_index.json`
+   - Supports multi-connection processing via psycopg2 connection pool
    - Used for performance benchmarking
+   - Managed by `TestRunManager` for test tracking and comparison
 
 2. **UI Mode** (`app.py` + Streamlit UI):
    - Web dashboard for monitoring migrations
    - Reads statistics from JSON files written by CLI
    - Does NOT execute migrations directly - instructs users to run CLI commands
-   - Provides visualization and analysis of results
+   - Provides visualization, analysis, and comparison of multiple test runs
+   - Three tabs: Migration, Analysis, Comparison
+
+### Test Run Management
+
+**TestRunManager** (`services/migration/test_run_manager.py`):
+- Manages multiple test executions and metadata
+- Creates unique test IDs: `{timestamp}_{provider}_{instance}_b{batch}_c{conn}`
+- Maintains index file: `migration_outputs/test_runs_index.json`
+- Provides filtering, sorting, and retrieval of test runs
+- Each test run stored in separate directory: `migration_outputs/runs/{test_id}/`
+
+**Test Run Directory Structure:**
+```
+migration_outputs/
+├── test_runs_index.json
+└── runs/
+    ├── 20251016_103045_GCP_db-custom-1-3840_b1000_c1/
+    │   ├── migration_progress.json
+    │   ├── migration_stats.json
+    │   └── migration_results.json
+    └── 20251016_110530_GCP_db-custom-2-7680_b1000_c10/
+        ├── migration_progress.json
+        ├── migration_stats.json
+        └── migration_results.json
+```
 
 ### Migration Service Architecture
 
-**Two migrator classes** (similar but separate):
-- `CLIDataMigrator` (in `migrate_cli.py`): CLI execution with parallel processing
-- `StreamlitDataMigrator` (in `services/migration/migrator.py`): Used by UI for monitoring
+**CLIDataMigrator** (in `migrate_cli.py`):
+- CLI execution with connection pooling
+- Integrates with TestRunManager for test tracking
+- Creates unique output directory per test run
+- Stores results with test metadata
 
-Both share similar logic but are independent implementations.
+### Multi-Connection Processing via Connection Pool
 
-### Multi-Connection Parallel Processing
-
-The CLI migrator uses **ThreadPoolExecutor** to process batches in parallel:
+Both migrator classes use **psycopg2.pool.ThreadedConnectionPool** for database connection management:
 - Data is split into batches (configurable size: 100-5000 records)
-- Each worker thread gets its own database connection
-- Thread-safe statistics collection using locks
-- Workers process batches concurrently, collecting results via `as_completed()`
+- Connection pool maintains 1 to N database connections (configurable via `--connections`)
+- Connections are reused across batches automatically
+- Pool handles connection lifecycle management
 
-Key implementation in `migrate_cli.py:215-297` (`_insert_batch_parallel` method):
-- Creates connection pool with N workers
-- Each batch submitted as separate job with dedicated connection
-- Results aggregated with thread-safe locking
-- Connections closed after batch completion
+Key implementation details:
+- `connect_to_db()`: Creates `ThreadedConnectionPool` with `minconn=1, maxconn=num_connections`
+- `get_connection()`: Gets a connection from the pool
+- `return_connection()`: Returns connection to pool after batch completion
+- `close()`: Closes all pooled connections via `closeall()`
+- No threading complexity or locks needed - pool handles concurrency
 
 ### Statistics Tracking System
 
-**Thread-safe JSON-based monitoring** via `StatsWriter` class:
+**JSON-based monitoring** via `StatsWriter` class:
 - `migration_progress.json`: Real-time progress updates
 - `migration_stats.json`: Per-batch performance metrics
 - `migration_results.json`: Final summary results
@@ -90,17 +118,15 @@ Performance metrics tracked per batch:
 
 ### Table Mapping Logic
 
-JSON filenames map to specific PostgreSQL tables via `get_table_name_from_filename()`:
-- `BidPublicInfoService_BID_CNSTWK_*.json` → `bid_pblanclistinfo_cnstwk`
-- `BidPublicInfoService_BID_SERVC_*.json` → `bid_pblanclistinfo_servc`
-- `BidPublicInfoService_BID_THNG_*.json` → `bid_pblanclistinfo_thng`
-- `BidPublicInfoService_BID_FRGCPT_*.json` → `bid_pblanclistinfo_frgcpt`
+JSON filenames map to PostgreSQL table via `get_table_name_from_filename()`:
 - `PubDataOpnStdService_ScsBidInfo_*.json` → `opn_std_scsbid_info`
 
-**Special case**: `opn_std_scsbid_info` table requires composite ID generation:
+**Composite ID Generation**: Each record requires a unique composite ID:
 ```python
 data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{offset+j+1}"
 ```
+
+This tool focuses on a single table (`opn_std_scsbid_info`) for database performance testing, keeping business logic minimal while maintaining sufficient data volume.
 
 ## Environment Configuration
 
@@ -127,9 +153,13 @@ All PostgreSQL connections use `sslmode='require'`.
 ### Batch Insert Pattern
 
 ```python
+# Generate composite ID for each record
+for j, data in enumerate(batch_data):
+    data['id'] = f"{data.get('bidNtceNo', '')}_{data.get('bidNtceOrd', '')}_{offset+j+1}"
+
 # Quote column names for case sensitivity
-quoted_columns = ', '.join([f'"{col}"' for col in table_columns])
-placeholders = ', '.join([f'%({col})s' for col in table_columns])
+quoted_columns = '"id", ' + ', '.join([f'"{col}"' for col in table_columns])
+placeholders = '%(id)s, ' + ', '.join([f'%({col})s' for col in table_columns])
 
 # Add timestamp columns
 quoted_columns += ', "createdAt", "updatedAt"'
@@ -154,19 +184,47 @@ Optimal configuration depends on:
 
 ## UI Components
 
-Streamlit app organized in modules:
-- `ui/migration_tab.py`: Shows data files, provides CLI command guidance
-- `ui/analysis_tab.py`: Visualizes batch statistics and performance trends
+Streamlit app organized in modules with three main tabs:
+
+1. **Migration Tab** (`ui/migration_tab.py`):
+   - Shows data files and CLI command guidance
+   - Displays recent test runs (last 5)
+   - Shows test status (running, completed, error)
+   - Provides quick view of test configurations and results
+
+2. **Analysis Tab** (`ui/analysis_tab.py`):
+   - Test selection dropdown to choose which test to analyze
+   - File-level migration results
+   - Batch-level performance statistics
+   - Performance charts (duration, throughput, cumulative records)
+   - Time breakdown analysis (data prep, query, commit, overhead)
+
+3. **Comparison Tab** (`ui/comparison_tab.py`):
+   - Lists all completed test runs
+   - Filters by provider, batch size, connections, status
+   - Multi-select for comparing 2+ tests
+   - Comparison charts:
+     - Total duration comparison (bar chart)
+     - Average throughput comparison (bar chart)
+     - Batch-level performance overlay (line charts)
+     - Time breakdown comparison (stacked bar)
+     - Configuration analysis (scatter plots)
+
+**Supporting Modules:**
 - `ui/sidebar.py`: Database connection info and configuration
 - `utils/session_state.py`: Session state initialization
+- `utils/comparison_utils.py`: Comparison data processing and analysis
 
-UI reads JSON files but does NOT execute migrations - it's a monitoring dashboard only.
+UI reads JSON files but does NOT execute migrations - it's a monitoring and analysis dashboard only.
 
 ## Important Notes
 
 - **Sample data exclusion**: `sample_data.json` is always excluded from processing
 - **Transaction isolation**: Each batch is an independent transaction - partial failures don't rollback other batches
-- **Connection management**: Multi-connection mode creates new connections per batch, closes after completion
-- **Thread safety**: Stats collection uses locks to prevent race conditions
+- **Connection pooling**: Uses `psycopg2.pool.ThreadedConnectionPool` for efficient connection reuse
+- **Connection management**: Connections obtained from pool per batch, returned after completion
 - **Case sensitivity**: Column names are quoted to preserve PostgreSQL case sensitivity
 - **Empty strings**: Treated as NULL values in data preparation
+- **Test isolation**: Each test run creates a separate directory - no data overwriting
+- **Test tracking**: All tests indexed in `test_runs_index.json` for easy retrieval and comparison
+- **Multi-test comparison**: Dashboard supports comparing unlimited number of test runs simultaneously

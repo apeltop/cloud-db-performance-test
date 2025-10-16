@@ -10,6 +10,7 @@ import os
 import json
 from pathlib import Path
 from services.migration.stats_writer import StatsWriter
+from services.migration.test_run_manager import TestRunManager
 
 
 def render_migration_tab():
@@ -42,15 +43,7 @@ def render_migration_tab():
                     total_size += size_mb
 
                     table_name = "Unknown"
-                    if file_path.name.startswith("BidPublicInfoService_BID_CNSTWK_"):
-                        table_name = "bid_pblanclistinfo_cnstwk"
-                    elif file_path.name.startswith("BidPublicInfoService_BID_SERVC_"):
-                        table_name = "bid_pblanclistinfo_servc"
-                    elif file_path.name.startswith("BidPublicInfoService_BID_THNG_"):
-                        table_name = "bid_pblanclistinfo_thng"
-                    elif file_path.name.startswith("BidPublicInfoService_BID_FRGCPT_"):
-                        table_name = "bid_pblanclistinfo_frgcpt"
-                    elif file_path.name.startswith("PubDataOpnStdService_ScsBidInfo_"):
+                    if file_path.name.startswith("PubDataOpnStdService_ScsBidInfo_"):
                         table_name = "opn_std_scsbid_info"
 
                     file_info.append({
@@ -129,15 +122,36 @@ def render_migration_tab():
             st.error("data 디렉토리를 찾을 수 없습니다.")
 
     with col2:
-        st.subheader("📋 현재 상태")
+        st.subheader("📋 최근 테스트 실행")
+
+        # Initialize test run manager
+        test_manager = TestRunManager()
+
+        # Get recent test runs
+        recent_runs = test_manager.get_recent_test_runs(limit=5)
+
+        if recent_runs:
+            for run in recent_runs:
+                status_icon = '✅' if run['status'] == 'completed' else ('🔄' if run['status'] == 'running' else '❌')
+                timestamp = run['timestamp'][:19] if run.get('timestamp') else 'N/A'
+                provider = run.get('cloud_provider', 'Unknown')
+                instance = run.get('instance_type', 'Unknown')
+                batch = run.get('batch_size', 0)
+                conn = run.get('num_connections', 0)
+                rps = run.get('average_records_per_second', 0)
+
+                with st.expander(f"{status_icon} {timestamp} - {provider}"):
+                    st.write(f"**Instance:** {instance}")
+                    st.write(f"**Batch Size:** {batch}")
+                    st.write(f"**Connections:** {conn}")
+                    if run['status'] == 'completed':
+                        st.write(f"**Throughput:** {rps:.1f} rec/s")
+                        st.write(f"**Duration:** {run.get('total_duration_seconds', 0):.1f}s")
+                    elif run['status'] == 'error':
+                        st.error(f"Error: {run.get('error_message', 'Unknown error')}")
+        else:
+            st.info("아직 실행된 테스트가 없습니다.")
 
         # Auto-refresh button
         if st.button("🔄 상태 새로고침"):
-            st.rerun()
-
-        # Auto-refresh toggle
-        auto_refresh = st.checkbox("자동 새로고침 (5초마다)", value=False)
-
-        if auto_refresh:
-            time.sleep(5)
             st.rerun()

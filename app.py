@@ -5,6 +5,7 @@ from utils.session_state import initialize_session_state
 from ui.sidebar import render_sidebar
 from ui.migration_tab import render_migration_tab
 from ui.analysis_tab import render_analysis_tab
+from ui.comparison_tab import render_comparison_tab
 
 # 페이지 설정
 st.set_page_config(
@@ -26,13 +27,16 @@ st.markdown("---")
 render_sidebar()
 
 # 메인 콘텐츠
-tab1, tab2 = st.tabs(["🔄 데이터 마이그레이션", "📈 상세 분석"])
+tab1, tab2, tab3 = st.tabs(["🔄 데이터 마이그레이션", "📈 상세 분석", "📊 테스트 비교"])
 
 with tab1:
     render_migration_tab()
 
 with tab2:
     render_analysis_tab()
+
+with tab3:
+    render_comparison_tab()
 
 # 푸터
 st.markdown("---")
