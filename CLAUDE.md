@@ -24,7 +24,7 @@ python migrate_cli.py --batch-size 100 --connections 1
 
 ### Run Streamlit Dashboard
 ```bash
-streamlit run app.py
+  source venv/bin/activate && streamlit run app.py
 ```
 
 ### Setup
