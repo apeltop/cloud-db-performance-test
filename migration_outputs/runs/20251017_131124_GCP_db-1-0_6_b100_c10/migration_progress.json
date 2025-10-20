@@ -1,0 +1,15 @@
+{
+  "status": "completed",
+  "current_file": "PubDataOpnStdService_ScsBidInfo_ScsBidInfo_202507010000.json",
+  "current_batch": 1000,
+  "files_completed": 0,
+  "total_files": 31,
+  "total_records_processed": 100000,
+  "start_time": "2025-10-17T13:11:24.907462",
+  "last_update": "2025-10-17T13:28:40.086107",
+  "batch_size": 100,
+  "num_connections": 10,
+  "cloud_provider": "GCP",
+  "instance_type": "db-1-0_6",
+  "error_message": "Interrupted by user"
+}

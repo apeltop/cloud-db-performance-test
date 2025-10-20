@@ -1,0 +1,21 @@
+{
+  "status": "completed",
+  "total_files": 0,
+  "successful": 0,
+  "failed": 0,
+  "total_records": 0,
+  "total_duration_seconds": 3951.418045282364,
+  "average_records_per_second": 0.0,
+  "file_results": [],
+  "table_counts": {},
+  "initial_counts": {
+    "opn_std_scsbid_info": 0
+  },
+  "max_records_limit": 100000,
+  "max_records_reached": true,
+  "completion_time": "2025-10-17T12:56:12.098889",
+  "batch_size": 10,
+  "num_connections": 10,
+  "cloud_provider": "GCP",
+  "instance_type": "db-1-0_6"
+}

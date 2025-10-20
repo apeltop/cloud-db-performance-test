@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "current_file": "",
+  "current_batch": 100,
+  "files_completed": 1,
+  "total_files": 31,
+  "total_records_processed": 100000,
+  "start_time": "2025-10-20T13:00:32.004819",
+  "last_update": "2025-10-20T13:14:14.748338",
+  "batch_size": 1000,
+  "num_connections": 1,
+  "cloud_provider": "GCP",
+  "instance_type": "db-2-3_75"
+}

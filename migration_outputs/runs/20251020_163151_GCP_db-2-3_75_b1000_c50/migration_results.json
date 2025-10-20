@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "total_files": 1,
+  "successful": 1,
+  "failed": 0,
+  "total_records": 100000,
+  "total_duration_seconds": 99.70165991783142,
+  "average_records_per_second": 1002.9923281359052,
+  "file_results": [
+    {
+      "filename": "PubDataOpnStdService_ScsBidInfo_ScsBidInfo_202507010000.json",
+      "table": "opn_std_scsbid_info",
+      "status": "success",
+      "records_processed": 164409,
+      "records_inserted": 100000
+    }
+  ],
+  "table_counts": {
+    "opn_std_scsbid_info": 150000
+  },
+  "initial_counts": {
+    "opn_std_scsbid_info": 0
+  },
+  "max_records_limit": 100000,
+  "max_records_reached": true,
+  "completion_time": "2025-10-20T16:33:31.703585",
+  "batch_size": 1000,
+  "num_connections": 50,
+  "cloud_provider": "GCP",
+  "instance_type": "db-2-3_75"
+}

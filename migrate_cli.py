@@ -8,6 +8,7 @@ import os
 import json
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 import time
 import logging
 import argparse
@@ -40,6 +41,7 @@ class CLIDataMigrator:
 
     def __init__(self, batch_size: int = 1000, num_connections: int = 1, max_records: int = None):
         self.conn = None
+        self.pool = None
         self.cloud_provider = os.getenv('CLOUD_PROVIDER', 'Unknown')
         self.instance_type = os.getenv('INSTANCE_TYPE', 'Unknown')
         self.env = os.getenv('ENV', 'CLOUD POSTGRESQL')
@@ -75,31 +77,34 @@ class CLIDataMigrator:
         self.connect_to_db()
 
     def connect_to_db(self):
-        """Connect to PostgreSQL database"""
+        """Create PostgreSQL connection pool"""
         try:
-            self.conn = psycopg2.connect(
+            # Create connection pool with extra connection for schema queries
+            # Total = num_connections (for parallel workers) + 1 (for self.conn)
+            self.pool = ThreadedConnectionPool(
+                minconn=1,
+                maxconn=self.num_connections + 1,
                 host=os.getenv('GCP_DB_HOST'),
                 port=os.getenv('GCP_DB_PORT', 5432),
                 database=os.getenv('GCP_DB_NAME'),
                 user=os.getenv('GCP_DB_USER'),
                 password=os.getenv('GCP_DB_PASSWORD'),
-                sslmode='require'
+                # sslmode='require'
             )
-            logger.info("Successfully connected to PostgreSQL database")
+            # Get one connection from pool for schema queries
+            self.conn = self.pool.getconn()
+            logger.info(f"Successfully created connection pool (total: {self.num_connections + 1}, workers: {self.num_connections})")
         except Exception as e:
-            logger.error(f"Failed to connect to database: {e}")
+            logger.error(f"Failed to create connection pool: {e}")
             raise
 
-    def create_connection(self):
-        """Create a new database connection for parallel processing"""
-        return psycopg2.connect(
-            host=os.getenv('GCP_DB_HOST'),
-            port=os.getenv('GCP_DB_PORT', 5432),
-            database=os.getenv('GCP_DB_NAME'),
-            user=os.getenv('GCP_DB_USER'),
-            password=os.getenv('GCP_DB_PASSWORD'),
-            sslmode='require'
-        )
+    def get_connection(self):
+        """Get a connection from the pool"""
+        return self.pool.getconn()
+
+    def return_connection(self, conn):
+        """Return a connection to the pool"""
+        self.pool.putconn(conn)
 
     def get_table_name_from_filename(self, filename: str) -> Optional[str]:
         """Extract table name from filename"""
@@ -145,15 +150,21 @@ class CLIDataMigrator:
 
         return prepared_data
 
-    def _insert_batch_worker(self, conn, table_name: str, table_columns: List[str],
+    def _insert_batch_worker(self, table_name: str, table_columns: List[str],
                             batch_records: List[Dict[str, Any]], batch_number: int,
                             start_offset: int) -> Dict[str, Any]:
-        """Worker function to insert a single batch using a dedicated connection"""
+        """Worker function to insert a single batch using a connection from the pool"""
         batch_start_time = time.time()
 
+        # Initialize variables for error logging
+        conn = None
+        insert_sql = None
+        batch_data = []
+
         try:
+            # Get connection from pool
+            conn = self.get_connection()
             cur = conn.cursor()
-            batch_data = []
 
             # Data preparation phase
             data_prep_start = time.time()
@@ -218,12 +229,25 @@ class CLIDataMigrator:
 
         except Exception as e:
             logger.error(f"Failed to insert batch {batch_number} into {table_name}: {e}")
-            conn.rollback()
+
+            # Log failed SQL and sample data for debugging
+            if insert_sql:
+                logger.error(f"Failed SQL: {insert_sql}")
+            if batch_data:
+                logger.error(f"Sample failed data (first record): {batch_data[0]}")
+                logger.error(f"Total records in failed batch: {len(batch_data)}")
+
+            if conn:
+                conn.rollback()
             return {
                 "success": False,
                 "batch_number": batch_number,
                 "error": str(e)
             }
+        finally:
+            # Return connection to pool if it was obtained
+            if conn:
+                self.return_connection(conn)
 
     def _insert_batch_parallel(self, table_name: str, records: List[Dict[str, Any]],
                                batch_size: int, table_columns: List[str]) -> int:
@@ -260,17 +284,16 @@ class CLIDataMigrator:
             # Submit all batch jobs
             future_to_batch = {}
             for batch_records, batch_number, start_offset in batches:
-                # Create a new connection for this worker
-                conn = self.create_connection()
+                # Submit job - worker will get connection from pool internally
                 future = executor.submit(
                     self._insert_batch_worker,
-                    conn, table_name, table_columns, batch_records, batch_number, start_offset
+                    table_name, table_columns, batch_records, batch_number, start_offset
                 )
-                future_to_batch[future] = (batch_number, conn)
+                future_to_batch[future] = batch_number
 
             # Collect results as they complete
             for future in as_completed(future_to_batch):
-                batch_number, conn = future_to_batch[future]
+                batch_number = future_to_batch[future]
                 try:
                     result = future.result()
 
@@ -316,17 +339,23 @@ class CLIDataMigrator:
                         if self.max_records and self.total_records_inserted >= self.max_records:
                             self.max_records_reached = True
                             logger.info(f"Maximum record limit ({self.max_records:,}) reached in parallel processing.")
+
+                            # Cancel all pending futures that haven't started yet
+                            cancelled_count = 0
+                            for f in future_to_batch:
+                                if not f.done():
+                                    if f.cancel():
+                                        cancelled_count += 1
+
+                            if cancelled_count > 0:
+                                logger.info(f"Cancelled {cancelled_count} pending batches")
+
+                            break  # Exit the result collection loop
                     else:
                         logger.error(f"Batch {batch_number} failed: {result.get('error', 'Unknown error')}")
 
                 except Exception as e:
                     logger.error(f"Exception processing batch {batch_number}: {e}")
-                finally:
-                    # Close the connection
-                    try:
-                        conn.close()
-                    except:
-                        pass
 
         logger.info(f"Total inserted into {table_name}: {total_inserted} records using {self.num_connections} connections")
         return total_inserted
@@ -621,10 +650,15 @@ class CLIDataMigrator:
         return counts
 
     def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-            logger.info("Database connection closed")
+        """Close database connections and pool"""
+        if self.pool:
+            # Return the main connection to the pool first
+            if self.conn:
+                self.pool.putconn(self.conn)
+                self.conn = None
+            # Close all connections in the pool
+            self.pool.closeall()
+            logger.info("Database connection pool closed")
 
 
 def main():
@@ -634,7 +668,7 @@ def main():
                         choices=[10, 100, 500, 1000, 2000, 5000],
                         help='Batch size for insert operations (default: 1000)')
     parser.add_argument('--connections', type=int, default=1,
-                        choices=[1, 2, 5, 10],
+                        choices=[1, 2, 5, 10, 20, 30, 50, 80],
                         help='Number of concurrent database connections (default: 1)')
     parser.add_argument('--max-records', type=int, default=None,
                         help='Maximum number of records to insert (default: no limit)')
